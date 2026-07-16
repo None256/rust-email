@@ -2,6 +2,8 @@ CREATE TABLE accounts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     email TEXT NOT NULL UNIQUE,
     display_name TEXT,
+    username TEXT NOT NULL,
+    password TEXT NOT NULL,
     imap_host TEXT NOT NULL,
     imap_port INTEGER NOT NULL CHECK (imap_port BETWEEN 1 AND 65535),
     smtp_host TEXT NOT NULL,
