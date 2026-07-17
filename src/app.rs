@@ -473,6 +473,31 @@ impl App {
                         }
                     }
                 }
+                Action::DeleteMail => {
+                    let (folder, uid) = if self.mode == Mode::MailList {
+                        let uid = self.mail_list.remove_selected();
+                        (self.mail_list.current_folder.clone(), uid)
+                    } else if self.mode == Mode::MailView {
+                        if let Some(ref mail) = self.mail_view.mail {
+                            let uid = Some(mail.uid);
+                            let folder = mail.folder.clone();
+                            self.switch_mode(Mode::MailList);
+                            (folder, uid)
+                        } else {
+                            return Ok(());
+                        }
+                    } else {
+                        return Ok(());
+                    };
+                    if let Some(uid) = uid {
+                        let _ = self
+                            .mail_client
+                            .add_flags(&folder, &[uid], &[mail_protocol::MailFlag::Deleted])
+                            .await;
+                        self.action_tx
+                            .send(Action::Error("邮件已标记为删除".into()))?;
+                    }
+                }
                 Action::LoadMoreMails => {}
                 Action::NextMail | Action::PrevMail => {}
                 Action::ToggleFlag => {

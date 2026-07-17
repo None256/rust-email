@@ -134,20 +134,6 @@ impl Component for FolderList {
 }
 
 /// 文件夹名显示：UTF-7 解码 → 中文翻译（不修改原始名称，原始名称用于 IMAP 命令）
-fn folder_display_name(name: &str) -> String {
-    // 先解码 IMAP modified UTF-7
-    let decoded = utf7_imap::decode_utf7_imap(name.to_string());
-    // 再翻译常见英文名
-    match decoded.as_str() {
-        "INBOX" => "收件箱".into(),
-        "Sent" | "Sent Messages" | "Sent Items" => "已发送".into(),
-        "Drafts" => "草稿箱".into(),
-        "Trash" | "Deleted Messages" | "Deleted Items" => "垃圾箱".into(),
-        "Junk" | "Spam" | "Junk Email" => "垃圾邮件".into(),
-        "Archive" | "Archives" => "归档".into(),
-        "Outbox" => "发件箱".into(),
-        "Important" => "重要邮件".into(),
-        "Flagged" | "Starred" => "星标邮件".into(),
-        _ => decoded,
-    }
+pub fn folder_display_name(name: &str) -> String {
+    crate::utils::folder_display_name(name)
 }

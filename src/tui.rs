@@ -229,6 +229,8 @@ impl DerefMut for Tui {
 
 impl Drop for Tui {
     fn drop(&mut self) {
-        self.exit().unwrap();
+        if let Err(e) = self.exit() {
+            eprintln!("Failed to exit TUI: {e}");
+        }
     }
 }

@@ -3,7 +3,7 @@
 use std::{collections::HashMap, env, path::PathBuf, sync::LazyLock};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use directories::ProjectDirs;
+
 use ratatui::style::{Color, Modifier, Style};
 use serde::{Deserialize, de::Deserializer};
 use tracing::error;
@@ -112,9 +112,6 @@ pub fn get_config_dir() -> PathBuf {
     directory
 }
 
-fn project_directory() -> Option<ProjectDirs> {
-    ProjectDirs::from("com", "kdheepak", env!("CARGO_PKG_NAME"))
-}
 
 #[derive(Clone, Debug, Default)]
 pub struct KeyBindings(pub HashMap<Mode, HashMap<Vec<KeyEvent>, Action>>);
@@ -129,13 +126,14 @@ impl<'de> Deserialize<'de> for KeyBindings {
         let keybindings = parsed_map
             .into_iter()
             .map(|(mode, inner_map)| {
-                let converted_inner_map = inner_map
+                inner_map
                     .into_iter()
-                    .map(|(key_str, cmd)| (parse_key_sequence(&key_str).unwrap(), cmd))
-                    .collect();
-                (mode, converted_inner_map)
+                    .map(|(key_str, cmd)| parse_key_sequence(&key_str).map(|seq| (seq, cmd)))
+                    .collect::<Result<HashMap<_, _>, _>>()
+                    .map_err(serde::de::Error::custom)
+                    .map(|m| (mode, m))
             })
-            .collect();
+            .collect::<Result<HashMap<_, _>, _>>()?;
 
         Ok(KeyBindings(keybindings))
     }

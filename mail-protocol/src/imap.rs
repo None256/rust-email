@@ -81,9 +81,34 @@ impl MailBackend for MailClient {
                 inner.session = Some(session);
                 Ok(())
             }
-            SecurityMode::StartTls => Err(MailError::Connection(
-                "STARTTLS not yet supported; use direct TLS (port 993)".into(),
-            )),
+            SecurityMode::StartTls => {
+                let tcp = TcpStream::connect((config.imap_host.as_str(), config.imap_port))
+                    .await
+                    .map_err(|e| MailError::Connection(format!("TCP connect: {e}")))?;
+
+                let mut client = ImapClientInner::new(tcp.compat());
+                client
+                    .run_command_and_check_ok("STARTTLS", None)
+                    .await
+                    .map_err(|e| MailError::Tls(format!("STARTTLS: {e}")))?;
+
+                let stream = client.into_inner();
+                let tls = TlsConnector::new();
+                let tls_stream = tls
+                    .connect(&config.imap_host, stream)
+                    .await
+                    .map_err(|e| MailError::Tls(format!("TLS handshake: {e}")))?;
+
+                let client = ImapClientInner::new(tls_stream);
+                let session = client
+                    .login(&config.username, &config.password)
+                    .await
+                    .map_err(|(e, _)| MailError::Authentication(format!("login failed: {e}")))?;
+
+                inner.config = Some(config.clone());
+                inner.session = Some(session);
+                Ok(())
+            }
             SecurityMode::None => Err(MailError::Connection(
                 "unencrypted IMAP not supported".into(),
             )),

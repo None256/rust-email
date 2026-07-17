@@ -42,6 +42,19 @@ impl MailList {
             .map(|m| m.uid)
     }
 
+    /// 删除当前选中邮件，返回被删除邮件的 UID
+    pub fn remove_selected(&mut self) -> Option<u32> {
+        let i = self.state.selected()?;
+        let uid = self.mails.get(i)?.uid;
+        self.mails.remove(i);
+        if self.mails.is_empty() {
+            self.state.select(None);
+        } else if i >= self.mails.len() {
+            self.state.select(Some(self.mails.len() - 1));
+        }
+        Some(uid)
+    }
+
     /// 切换星标（返回 true=已加星, false=取消星标）
     pub fn toggle_flag(&mut self) -> Option<(u32, bool)> {
         let i = self.state.selected()?;
@@ -210,19 +223,7 @@ fn shorten_sender(s: &str) -> String {
 
 /// 文件夹名解码+翻译（仅供显示，不影响原始名）
 fn folder_display_name(name: &str) -> String {
-    let decoded = utf7_imap::decode_utf7_imap(name.to_string());
-    match decoded.as_str() {
-        "INBOX" => "收件箱".into(),
-        "Sent" | "Sent Messages" | "Sent Items" => "已发送".into(),
-        "Drafts" => "草稿箱".into(),
-        "Trash" | "Deleted Messages" | "Deleted Items" => "垃圾箱".into(),
-        "Junk" | "Spam" | "Junk Email" => "垃圾邮件".into(),
-        "Archive" | "Archives" => "归档".into(),
-        "Outbox" => "发件箱".into(),
-        "Important" => "重要邮件".into(),
-        "Flagged" | "Starred" => "星标邮件".into(),
-        _ => decoded,
-    }
+    crate::utils::folder_display_name(name)
 }
 
 /// 计算字符串在终端中的显示宽度（中文 = 2，英文 = 1）

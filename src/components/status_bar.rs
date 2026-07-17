@@ -107,10 +107,7 @@ impl Component for StatusBar {
         let folder = self
             .current_folder
             .as_deref()
-            .map(|n| {
-                let decoded = utf7_imap::decode_utf7_imap(n.to_string());
-                translate_folder(&decoded)
-            })
+            .map(|n| translate_folder(n))
             .unwrap_or_else(|| "未选择文件夹".to_string());
 
         let left_line = Line::from(vec![
@@ -151,16 +148,5 @@ fn right_hint_width() -> u16 {
 
 /// 文件夹名翻译
 fn translate_folder(name: &str) -> String {
-    match name {
-        "INBOX" => "收件箱".into(),
-        "Sent" | "Sent Messages" | "Sent Items" => "已发送".into(),
-        "Drafts" => "草稿箱".into(),
-        "Trash" | "Deleted Messages" | "Deleted Items" => "垃圾箱".into(),
-        "Junk" | "Spam" | "Junk Email" => "垃圾邮件".into(),
-        "Archive" | "Archives" => "归档".into(),
-        "Outbox" => "发件箱".into(),
-        "Important" => "重要邮件".into(),
-        "Flagged" | "Starred" => "星标邮件".into(),
-        _ => name.to_string(),
-    }
+    crate::utils::folder_display_name(name)
 }
