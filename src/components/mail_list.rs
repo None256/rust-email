@@ -1,6 +1,6 @@
 use ratatui::{
     Frame,
-    layout::Rect,
+    layout::{Margin, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span, Text},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
@@ -16,6 +16,9 @@ pub struct MailList {
     pub mails: Vec<mail_protocol::EmailSummary>,
     pub state: ListState,
     pub current_folder: String,
+    cached_items: Vec<ListItem<'static>>,
+    dirty: bool,
+    last_width: u16,
 }
 
 impl MailList {
@@ -33,6 +36,7 @@ impl MailList {
         } else {
             Some(0)
         });
+        self.dirty = true;
     }
 
     pub fn selected_uid(&self) -> Option<u32> {
@@ -52,6 +56,7 @@ impl MailList {
         } else if i >= self.mails.len() {
             self.state.select(Some(self.mails.len() - 1));
         }
+        self.dirty = true;
         Some(uid)
     }
 
@@ -65,6 +70,7 @@ impl MailList {
         } else {
             mail.flags.push(mail_protocol::MailFlag::Flagged);
         }
+        self.dirty = true;
         Some((mail.uid, !flagged))
     }
 
@@ -75,6 +81,7 @@ impl MailList {
             .map(|i| (i + 1).min(self.mails.len().saturating_sub(1)))
             .unwrap_or(0);
         self.state.select(Some(i));
+        self.dirty = true;
     }
 
     fn prev(&mut self) {
@@ -84,6 +91,7 @@ impl MailList {
             .map(|i| i.saturating_sub(1))
             .unwrap_or(0);
         self.state.select(Some(i));
+        self.dirty = true;
     }
 }
 
@@ -115,6 +123,7 @@ impl Component for MailList {
         match action {
             Action::SelectFolder(ref name) => {
                 self.current_folder = name.clone();
+                self.dirty = true;
             }
             _ => {}
         }
@@ -122,66 +131,24 @@ impl Component for MailList {
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> color_eyre::Result<()> {
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .title(format!(" 📨 {} ", folder_display_name(&self.current_folder)))
-            .style(Style::default().fg(Color::White));
-        let inner = block.inner(area);
+        let inner = area.inner(Margin {
+            horizontal: 1,
+            vertical: 1,
+        });
 
-        // 布局：标记(2) + 发件人(14) + 日期(10) + 空格(1) + 主题 = inner.width
-        let show_date = inner.width >= 70;
-        let from_w: usize = 14;
-        let date_w: usize = if show_date { 10 } else { 0 };
-        let subj_w = (inner.width as usize).saturating_sub(from_w + date_w + 4);
+        if self.dirty || inner.width != self.last_width {
+            self.cached_items = build_items(&self.mails, inner.width);
+            self.dirty = false;
+            self.last_width = inner.width;
+        }
 
-        let items: Vec<ListItem> = self
-            .mails
-            .iter()
-            .map(|m| {
-                let is_seen = m.flags.contains(&mail_protocol::MailFlag::Seen);
-                let attach = if m.has_attachments { " 📎" } else { "" };
-
-                let flag = if m.flags.contains(&mail_protocol::MailFlag::Flagged) {
-                    "★"
-                } else if is_seen {
-                    " "
-                } else {
-                    "●"
-                };
-
-                let display_from = shorten_sender(&m.from);
-                let from = truncate_cols(&display_from, from_w);
-                let from_padded = pad_right(&from, from_w);
-
-                let date = reformat_date(&m.date);
-                let date_padded = pad_left(&date, date_w);
-
-                let subj = truncate_cols(&m.subject, subj_w);
-                let subj_padded = pad_right(&subj, subj_w);
-
-                let style = if is_seen {
-                    Style::default().fg(Color::DarkGray)
-                } else {
-                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
-                };
-
-                let mut spans = vec![
-                    Span::styled(format!("{} ", flag), Style::default().fg(Color::Yellow)),
-                    Span::styled(from_padded, Style::default().fg(Color::Cyan)),
-                ];
-                if show_date {
-                    spans.push(Span::styled(date_padded, Style::default().fg(Color::DarkGray)));
-                }
-                spans.push(Span::raw(" "));
-                spans.push(Span::styled(subj_padded, style));
-                spans.push(Span::raw(attach));
-
-                ListItem::new(Line::from(spans))
-            })
-            .collect();
-
-        let list = List::new(items)
-            .block(block)
+        let list = List::new(self.cached_items.clone())
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(format!(" 📨 {} ", folder_display_name(&self.current_folder)))
+                    .style(Style::default().fg(Color::White)),
+            )
             .highlight_style(
                 Style::default()
                     .fg(Color::Black)
@@ -193,6 +160,10 @@ impl Component for MailList {
         frame.render_stateful_widget(list, area, &mut self.state);
 
         if self.mails.is_empty() {
+            let inner = area.inner(Margin {
+                horizontal: 1,
+                vertical: 1,
+            });
             frame.render_widget(
                 Paragraph::new(Text::from("暂无邮件\n按 Esc 返回文件夹列表"))
                     .style(Style::default().fg(Color::DarkGray))
@@ -221,7 +192,63 @@ fn shorten_sender(s: &str) -> String {
     }
 }
 
-/// 文件夹名解码+翻译（仅供显示，不影响原始名）
+fn build_items(mails: &[mail_protocol::EmailSummary], width: u16) -> Vec<ListItem<'static>> {
+    let show_date = width >= 70;
+    let from_w: usize = 14;
+    let date_w: usize = if show_date { 10 } else { 0 };
+    let subj_w = (width as usize).saturating_sub(from_w + date_w + 4);
+
+    mails
+        .iter()
+        .map(|m| {
+            let is_seen = m.flags.contains(&mail_protocol::MailFlag::Seen);
+            let attach = if m.has_attachments { " 📎" } else { "" };
+
+            let flag = if m.flags.contains(&mail_protocol::MailFlag::Flagged) {
+                "★"
+            } else if is_seen {
+                " "
+            } else {
+                "●"
+            };
+
+            let display_from = shorten_sender(&m.from);
+            let from = truncate_cols(&display_from, from_w);
+            let from_padded = pad_right(&from, from_w);
+
+            let date = reformat_date(&m.date);
+            let date_padded = pad_left(&date, date_w);
+
+            let subj = truncate_cols(&m.subject, subj_w);
+            let subj_padded = pad_right(&subj, subj_w);
+
+            let style = if is_seen {
+                Style::default().fg(Color::DarkGray)
+            } else {
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD)
+            };
+
+            let mut spans = vec![
+                Span::styled(format!("{} ", flag), Style::default().fg(Color::Yellow)),
+                Span::styled(from_padded, Style::default().fg(Color::Cyan)),
+            ];
+            if show_date {
+                spans.push(Span::styled(
+                    date_padded,
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+            spans.push(Span::raw(" "));
+            spans.push(Span::styled(subj_padded, style));
+            spans.push(Span::raw(attach));
+
+            ListItem::new(Line::from(spans))
+        })
+        .collect()
+}
+
 fn folder_display_name(name: &str) -> String {
     crate::utils::folder_display_name(name)
 }
