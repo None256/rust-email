@@ -343,7 +343,7 @@ impl Component for AccountForm {
             ]),
             Line::from(vec![
                 Span::styled("⚠ ", Style::default().fg(Color::Red)),
-                Span::raw("密码/授权码将以明文存储在本地数据库中，请确保电脑安全。"),
+                Span::raw("密码/授权码将加密存储在本地数据库中，请妥善保管本地密钥文件。"),
             ]),
         ];
         let help_p = Paragraph::new(Text::from(help_text))

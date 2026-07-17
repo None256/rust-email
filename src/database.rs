@@ -1,4 +1,12 @@
 use std::path::Path;
+use std::sync::OnceLock;
+
+use aes_gcm::{
+    Aes256Gcm, Nonce,
+    aead::{Aead, KeyInit},
+};
+use base64::{Engine, engine::general_purpose::STANDARD as B64};
+use rand::RngCore;
 
 use mail_protocol::{
     AccountConfig, AttachmentMeta, Email, EmailSummary, Folder, MailFlag, SecurityMode,
@@ -7,6 +15,95 @@ use sqlx::{
     Row, SqlitePool,
     sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},
 };
+
+static PASSWORD_KEY: OnceLock<[u8; 32]> = OnceLock::new();
+
+fn parent_path(path: &Path) -> &Path {
+    path.parent().unwrap_or_else(|| Path::new("."))
+}
+
+fn init_password_key(dir: &Path) -> color_eyre::Result<()> {
+    if PASSWORD_KEY.get().is_some() {
+        return Ok(());
+    }
+    let key_path = dir.join("password.key");
+    let mut key = [0u8; 32];
+    if key_path.exists() {
+        let bytes = std::fs::read(&key_path)?;
+        key.copy_from_slice(
+            bytes
+                .get(..32)
+                .ok_or_else(|| color_eyre::eyre::eyre!("invalid password key"))?,
+        );
+    } else {
+        rand::thread_rng().fill_bytes(&mut key);
+        std::fs::write(&key_path, key)?;
+    }
+    let _ = PASSWORD_KEY.set(key);
+    Ok(())
+}
+
+fn encrypt_password(password: &str) -> color_eyre::Result<String> {
+    let key = PASSWORD_KEY.get_or_init(|| {
+        let mut key = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut key);
+        key
+    });
+    let cipher = Aes256Gcm::new_from_slice(key).unwrap();
+    let mut nonce = [0u8; 12];
+    rand::thread_rng().fill_bytes(&mut nonce);
+    let ciphertext = cipher
+        .encrypt(Nonce::from_slice(&nonce), password.as_bytes())
+        .map_err(|_| color_eyre::eyre::eyre!("password encryption failed"))?;
+    Ok(format!(
+        "v1:{}:{}",
+        B64.encode(nonce),
+        B64.encode(ciphertext)
+    ))
+}
+
+fn decrypt_password(value: &str) -> color_eyre::Result<String> {
+    let key = PASSWORD_KEY
+        .get()
+        .ok_or_else(|| color_eyre::eyre::eyre!("password key is not initialized"))?;
+    let mut parts = value.split(':');
+    if parts.next() != Some("v1") {
+        return Err(color_eyre::eyre::eyre!("unsupported password format"));
+    }
+    let nonce = B64.decode(
+        parts
+            .next()
+            .ok_or_else(|| color_eyre::eyre::eyre!("invalid password"))?,
+    )?;
+    if nonce.len() != 12 {
+        return Err(color_eyre::eyre::eyre!("invalid password nonce"));
+    }
+    let ciphertext = B64.decode(
+        parts
+            .next()
+            .ok_or_else(|| color_eyre::eyre::eyre!("invalid password"))?,
+    )?;
+    let cipher = Aes256Gcm::new_from_slice(key).unwrap();
+    let plaintext = cipher
+        .decrypt(Nonce::from_slice(&nonce), ciphertext.as_ref())
+        .map_err(|_| color_eyre::eyre::eyre!("password decryption failed"))?;
+    Ok(String::from_utf8(plaintext)?)
+}
+
+async fn migrate_plaintext_passwords(pool: &SqlitePool) -> color_eyre::Result<()> {
+    let rows = sqlx::query("SELECT id,password FROM accounts WHERE (password_encrypted IS NULL OR password_encrypted='') AND password <> ''")
+        .fetch_all(pool).await?;
+    for row in rows {
+        let id: i64 = row.try_get("id")?;
+        let password: String = row.try_get("password")?;
+        sqlx::query("UPDATE accounts SET password='', password_encrypted=? WHERE id=?")
+            .bind(encrypt_password(&password)?)
+            .bind(id)
+            .execute(pool)
+            .await?;
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone)]
 pub struct Account {
@@ -37,26 +134,29 @@ pub async fn connect(path: &Path) -> color_eyre::Result<SqlitePool> {
         .connect_with(options)
         .await?;
     sqlx::migrate!("./migrations").run(&pool).await?;
+    init_password_key(parent_path(path))?;
+    migrate_plaintext_passwords(&pool).await?;
     Ok(pool)
 }
 
 pub async fn list_accounts(pool: &SqlitePool) -> color_eyre::Result<Vec<Account>> {
-    let rows = sqlx::query("SELECT id,email,display_name,username,password,imap_host,imap_port,smtp_host,smtp_port,security_mode FROM accounts ORDER BY id")
+    let rows = sqlx::query("SELECT id,email,display_name,username,password,password_encrypted,imap_host,imap_port,smtp_host,smtp_port,security_mode FROM accounts ORDER BY id")
         .fetch_all(pool).await?;
     rows.iter().map(account_from_row).collect()
 }
 
 pub async fn get_account(pool: &SqlitePool, id: i64) -> color_eyre::Result<Option<Account>> {
-    let row = sqlx::query("SELECT id,email,display_name,username,password,imap_host,imap_port,smtp_host,smtp_port,security_mode FROM accounts WHERE id=?")
+    let row = sqlx::query("SELECT id,email,display_name,username,password,password_encrypted,imap_host,imap_port,smtp_host,smtp_port,security_mode FROM accounts WHERE id=?")
         .bind(id).fetch_optional(pool).await?;
     row.as_ref().map(account_from_row).transpose()
 }
 
 /// Inserts an account, or updates it when the email address already exists.
 pub async fn save_account(pool: &SqlitePool, account: &NewAccount) -> color_eyre::Result<Account> {
-    let id: i64 = sqlx::query_scalar("INSERT INTO accounts (email,display_name,username,password,imap_host,imap_port,smtp_host,smtp_port,security_mode) VALUES (?,?,?,?,?,?,?,?,?) ON CONFLICT(email) DO UPDATE SET display_name=excluded.display_name,username=excluded.username,password=excluded.password,imap_host=excluded.imap_host,imap_port=excluded.imap_port,smtp_host=excluded.smtp_host,smtp_port=excluded.smtp_port,security_mode=excluded.security_mode,updated_at=unixepoch() RETURNING id")
+    let encrypted = encrypt_password(&account.config.password)?;
+    let id: i64 = sqlx::query_scalar("INSERT INTO accounts (email,display_name,username,password,password_encrypted,imap_host,imap_port,smtp_host,smtp_port,security_mode) VALUES (?,?,?,?,?,?,?,?,?,?) ON CONFLICT(email) DO UPDATE SET display_name=excluded.display_name,username=excluded.username,password='',password_encrypted=excluded.password_encrypted,imap_host=excluded.imap_host,imap_port=excluded.imap_port,smtp_host=excluded.smtp_host,smtp_port=excluded.smtp_port,security_mode=excluded.security_mode,updated_at=unixepoch() RETURNING id")
         .bind(&account.email).bind(&account.display_name).bind(&account.config.username)
-        .bind(&account.config.password).bind(&account.config.imap_host).bind(i64::from(account.config.imap_port))
+        .bind("").bind(encrypted).bind(&account.config.imap_host).bind(i64::from(account.config.imap_port))
         .bind(&account.config.smtp_host).bind(i64::from(account.config.smtp_port)).bind(security_to_str(&account.config.security))
         .fetch_one(pool).await?;
     get_account(pool, id)
@@ -203,13 +303,18 @@ async fn ensure_folder(pool: &SqlitePool, account_id: i64, name: &str) -> color_
 }
 
 fn account_from_row(r: &sqlx::sqlite::SqliteRow) -> color_eyre::Result<Account> {
+    let encrypted: Option<String> = r.try_get("password_encrypted")?;
+    let password = match encrypted.filter(|v| !v.is_empty()) {
+        Some(v) => decrypt_password(&v)?,
+        None => r.try_get("password")?,
+    };
     Ok(Account {
         id: r.try_get("id")?,
         email: r.try_get("email")?,
         display_name: r.try_get("display_name")?,
         config: AccountConfig {
             username: r.try_get("username")?,
-            password: r.try_get("password")?,
+            password,
             imap_host: r.try_get("imap_host")?,
             imap_port: r.try_get::<i64, _>("imap_port")? as u16,
             smtp_host: r.try_get("smtp_host")?,
@@ -302,6 +407,15 @@ mod tests {
     async fn account_crud() {
         let p = pool().await;
         let a = save_account(&p, &account()).await.unwrap();
+        let stored = sqlx::query("SELECT password,password_encrypted FROM accounts WHERE id=?")
+            .bind(a.id)
+            .fetch_one(&p)
+            .await
+            .unwrap();
+        assert_eq!(stored.get::<String, _>("password"), "");
+        let encrypted = stored.get::<String, _>("password_encrypted");
+        assert!(encrypted.starts_with("v1:"));
+        assert!(!encrypted.contains("secret"));
         assert_eq!(list_accounts(&p).await.unwrap().len(), 1);
         let mut n = account();
         n.config.password = "new".into();
