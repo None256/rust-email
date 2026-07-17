@@ -119,27 +119,31 @@ fn build_message(email: &OutgoingEmail) -> Result<Message, MailError> {
 fn build_mime(email: &OutgoingEmail) -> Result<MultiPart, MailError> {
     let mut parts = Vec::new();
 
-    // 纯文本正文
     if let Some(ref text) = email.body_text {
-        parts.push(
-            SinglePart::builder()
-                .header(ContentType::TEXT_PLAIN)
-                .body(text.clone()),
-        );
+        let trimmed = text.trim();
+        if !trimmed.is_empty() {
+            parts.push(
+                SinglePart::builder()
+                    .header(ContentType::TEXT_PLAIN)
+                    .body(trimmed.to_string()),
+            );
+        }
     }
 
-    // HTML 正文
     if let Some(ref html) = email.body_html {
-        parts.push(
-            SinglePart::builder()
-                .header(ContentType::TEXT_HTML)
-                .body(html.clone()),
-        );
+        let trimmed = html.trim();
+        if !trimmed.is_empty() {
+            parts.push(
+                SinglePart::builder()
+                    .header(ContentType::TEXT_HTML)
+                    .body(trimmed.to_string()),
+            );
+        }
     }
 
-    // 附件
     for att in &email.attachments {
-        let content_type = ContentType::parse(&att.mime_type).unwrap_or(ContentType::TEXT_PLAIN);
+        let content_type = ContentType::parse(&att.mime_type)
+            .unwrap_or_else(|_| "application/octet-stream".parse().unwrap());
 
         let mut part_builder = SinglePart::builder()
             .header(content_type)
@@ -152,7 +156,6 @@ fn build_mime(email: &OutgoingEmail) -> Result<MultiPart, MailError> {
         parts.push(part_builder.body(att.data.clone()));
     }
 
-    // 将所有 SinglePart 组合成一个 mixed multipart
     let mut mixed = MultiPart::mixed().build();
     for part in parts {
         mixed = mixed.singlepart(part);

@@ -589,7 +589,8 @@ impl App {
 
                 // ── 附件添加/移除（写邮件） ──
                 Action::AddAttachment(path) => {
-                    let path = std::path::PathBuf::from(path);
+                    // 去除引号（Windows 拖拽文件时常带引号）
+                    let path = std::path::PathBuf::from(path.trim_matches(&['"', '\''][..]));
                     match tokio::fs::read(&path).await {
                         Ok(data) => {
                             let filename = path
