@@ -32,7 +32,7 @@
       "<a>": "ReplyAll",           // 回复全部
       "<f>": "Forward",            // 转发
       "<d>": "DeleteMail",         // 删除
-      "<*>": "ToggleFlag",         // 星标
+      "<s>": "ToggleFlag",         // 星标
       "<M>": "LoadMoreMails",      // 加载更多
     },
 
@@ -46,7 +46,7 @@
       "<a>": "ReplyAll",
       "<f>": "Forward",
       "<d>": "DeleteMail",
-      "<*>": "ToggleFlag",
+      "<s>": "ToggleFlag",
       "<h>": "ShowHtml",           // HTML 视图
       "<t>": "ShowText",           // 纯文本视图
     },

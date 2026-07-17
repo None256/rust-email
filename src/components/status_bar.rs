@@ -28,9 +28,13 @@ impl StatusBar {
     }
 
     /// 由 App 在模式切换时调用
-    #[allow(dead_code)]
     pub fn set_mode(&mut self, mode: Mode) {
         self.mode = mode;
+    }
+
+    /// 清除当前文件夹显示（回到首页时调用）
+    pub fn clear_folder(&mut self) {
+        self.current_folder = None;
     }
 
     fn set_message(&mut self, msg: String) {
@@ -60,16 +64,16 @@ impl Component for StatusBar {
             Action::ToggleRead => self.set_message("✓ 已切换已读/未读".into()),
             _ => {}
         }
-        // 5 秒后清除临时消息
-        if let Some((_, time)) = self.status_message {
-            if time.elapsed().as_secs() > 5 {
-                self.status_message = None;
-            }
-        }
         Ok(None)
     }
 
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> color_eyre::Result<()> {
+        // 每次绘制前检查临时消息是否超时
+        if let Some((_, time)) = self.status_message {
+            if time.elapsed().as_secs() > 3 {
+                self.status_message = None;
+            }
+        }
         // 只取底部 1 行
         let areas: [Rect; 2] =
             Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).areas(area);
@@ -83,10 +87,14 @@ impl Component for StatusBar {
             Rect::new(bottom.x, separator_y, bottom.width, 1),
         );
 
-        // 左右分区
-        let cols: [Rect; 2] =
-            Layout::horizontal([Constraint::Percentage(60), Constraint::Percentage(40)])
-                .areas(bottom);
+        // 左右分区（固定宽度，避免截断）
+        let right_width = right_hint_width();
+        let left_width = bottom.width.saturating_sub(right_width);
+        let cols: [Rect; 2] = Layout::horizontal([
+            Constraint::Length(left_width),
+            Constraint::Length(right_width),
+        ])
+        .areas(bottom);
         let (left_area, right_area) = (cols[0], cols[1]);
 
         // ── 左侧：连接状态 + 文件夹 ──
@@ -99,7 +107,11 @@ impl Component for StatusBar {
         let folder = self
             .current_folder
             .as_deref()
-            .unwrap_or("未选择文件夹");
+            .map(|n| {
+                let decoded = utf7_imap::decode_utf7_imap(n.to_string());
+                translate_folder(&decoded)
+            })
+            .unwrap_or_else(|| "未选择文件夹".to_string());
 
         let left_line = Line::from(vec![
             Span::styled(format!(" {icon} "), Style::default().fg(color)),
@@ -120,8 +132,8 @@ impl Component for StatusBar {
                 Mode::Home => "q:退出  ↑↓:选择  Enter:连接  a:添加  d:删除",
                 Mode::AccountForm => "Tab/↑↓:切换  Enter:确认  Ctrl+S:保存  Esc:取消",
                 Mode::FolderList => "q:退出  j↓/k↑  Enter:进入  R:刷新",
-                Mode::MailList => "q:退出  j↓/k↑  Enter:查看  r:回复  d:删除  *:星标",
-                Mode::MailView => "q:退出  r:回复  d:删除  h:HTML  t:文本  j/k:上下",
+                Mode::MailList => "q:退出  j↓/k↑  Enter:查看  r:回复  d:删除  s:星标",
+                Mode::MailView => "q:退出  r:回复  d:删除  h:HTML  t:文本  j/k:上下  s:星标",
                 Mode::Compose => "Ctrl+S:发送  Esc:取消",
             };
             Line::from(Span::styled(hint, Style::default().fg(Color::DarkGray)))
@@ -129,5 +141,26 @@ impl Component for StatusBar {
         frame.render_widget(Paragraph::new(right_line).right_aligned(), right_area);
 
         Ok(())
+    }
+}
+
+/// 右侧提示文字需要的宽度（取最长的提示）
+fn right_hint_width() -> u16 {
+    50 // 足够容纳最长的快捷键提示
+}
+
+/// 文件夹名翻译
+fn translate_folder(name: &str) -> String {
+    match name {
+        "INBOX" => "收件箱".into(),
+        "Sent" | "Sent Messages" | "Sent Items" => "已发送".into(),
+        "Drafts" => "草稿箱".into(),
+        "Trash" | "Deleted Messages" | "Deleted Items" => "垃圾箱".into(),
+        "Junk" | "Spam" | "Junk Email" => "垃圾邮件".into(),
+        "Archive" | "Archives" => "归档".into(),
+        "Outbox" => "发件箱".into(),
+        "Important" => "重要邮件".into(),
+        "Flagged" | "Starred" => "星标邮件".into(),
+        _ => name.to_string(),
     }
 }

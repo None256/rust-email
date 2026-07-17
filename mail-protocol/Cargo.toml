@@ -21,6 +21,12 @@ tokio-util = { version = "0.7", features = ["compat"] }
 # MIME 解析
 mailparse = "0.15"
 
+# Base64 解码（MIME encoded-word）
+base64 = "0.22"
+
+# IMAP modified UTF-7 编解码
+utf7-imap = "0.3"
+
 # SMTP
 lettre = { version = "0.11", default-features = false, features = [
     "builder",

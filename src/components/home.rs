@@ -126,18 +126,6 @@ impl Component for Home {
             );
         }
 
-        // 底部快捷键
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(" j↓/k↑ ", Style::default().fg(Color::DarkGray)), Span::raw("选择  "),
-                Span::styled(" Enter ", Style::default().fg(Color::DarkGray)), Span::raw("连接  "),
-                Span::styled(" a ", Style::default().fg(Color::DarkGray)), Span::raw("添加  "),
-                Span::styled(" d ", Style::default().fg(Color::DarkGray)), Span::raw("删除  "),
-                Span::styled(" q ", Style::default().fg(Color::DarkGray)), Span::raw("退出"),
-            ])).style(Style::default().bg(Color::Black)),
-            Rect::new(area.x, area.y + area.height.saturating_sub(1), area.width, 1),
-        );
-
         Ok(())
     }
 }

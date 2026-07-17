@@ -11,8 +11,8 @@ use mail_protocol::AccountConfig;
 use crate::{
     action::Action,
     components::{
-        Component, account_form::AccountForm, folder_list::FolderList, fps::FpsCounter, home::Home,
-        mail_list::MailList, mail_view::MailView, status_bar::StatusBar,
+        account_form::AccountForm, compose::Compose, folder_list::FolderList, fps::FpsCounter,
+        home::Home, mail_list::MailList, mail_view::MailView, status_bar::StatusBar, Component,
     },
     config::Config,
     database::{self, Account, NewAccount},
@@ -27,6 +27,7 @@ pub struct App {
     // 组件
     home: Home,
     account_form: AccountForm,
+    compose: Compose,
     folder_list: FolderList,
     mail_list: MailList,
     mail_view: MailView,
@@ -85,6 +86,7 @@ impl App {
             frame_rate,
             home: Home::new(),
             account_form: AccountForm::new(),
+            compose: Compose::new(),
             folder_list: FolderList::new(),
             mail_list: MailList::new(),
             mail_view: MailView::new(),
@@ -146,7 +148,7 @@ impl App {
             Mode::FolderList => &mut self.folder_list,
             Mode::MailList => &mut self.mail_list,
             Mode::MailView => &mut self.mail_view,
-            Mode::Compose => &mut self.fps_counter,
+            Mode::Compose => &mut self.compose,
         }
     }
 
@@ -258,6 +260,62 @@ impl App {
                             info!("已删除账户");
                         }
                     }
+                }
+
+                // ── 写邮件 ──
+                Action::Compose => {
+                    self.compose = Compose::new();
+                    self.switch_mode(Mode::Compose);
+                }
+                Action::Reply => {
+                    if let Some(ref mail) = self.mail_view.mail {
+                        self.compose = Compose::new();
+                        self.compose.set_reply(&mail.from, &mail.subject);
+                        self.switch_mode(Mode::Compose);
+                    }
+                }
+                Action::ReplyAll => {
+                    if let Some(ref mail) = self.mail_view.mail {
+                        self.compose = Compose::new();
+                        self.compose.set_reply_all(&mail.from, &mail.to, &mail.subject);
+                        self.switch_mode(Mode::Compose);
+                    }
+                }
+                Action::Forward => {
+                    if let Some(ref mail) = self.mail_view.mail {
+                        self.compose = Compose::new();
+                        self.compose.set_forward(&mail.subject);
+                        self.switch_mode(Mode::Compose);
+                    }
+                }
+                Action::Send => {
+                    if let Some(account) = self
+                        .active_account_id
+                        .and_then(|id| self.accounts.iter().find(|a| a.id == id))
+                    {
+                        let email = self.compose.build_outgoing(&account.config.username);
+                        match mail_protocol::smtp::SmtpSender::send(&account.config, &email).await {
+                            Ok(_) => {
+                                info!("邮件发送成功");
+                                self.switch_mode(
+                                    if self.mail_list.current_folder.is_empty() {
+                                        Mode::Home
+                                    } else {
+                                        Mode::MailList
+                                    },
+                                );
+                            }
+                            Err(e) => {
+                                self.action_tx.send(Action::Error(format!("发送失败: {e}")))?;
+                            }
+                        }
+                    } else {
+                        self.action_tx
+                            .send(Action::Error("未连接账户，无法发送".into()))?;
+                    }
+                }
+                Action::CancelCompose => {
+                    self.switch_mode(Mode::MailList);
                 }
 
                 // ── 连接管理 ──
@@ -382,6 +440,19 @@ impl App {
                         info!("获取邮件 UID={} 来自 {}", uid, folder);
                         match self.mail_client.fetch_message(&folder, uid).await {
                             Ok(mail) => {
+                                // 标记为已读
+                                let _ = self
+                                    .mail_client
+                                    .add_flags(&folder, &[uid], &[mail_protocol::MailFlag::Seen])
+                                    .await;
+                                // 更新本地标记
+                                if let Some(i) = self.mail_list.state.selected() {
+                                    if let Some(m) = self.mail_list.mails.get_mut(i) {
+                                        if !m.flags.contains(&mail_protocol::MailFlag::Seen) {
+                                            m.flags.push(mail_protocol::MailFlag::Seen);
+                                        }
+                                    }
+                                }
                                 if let Some(account_id) = self.active_account_id {
                                     database::cache_email(&self.database, account_id, &mail)
                                         .await?;
@@ -408,6 +479,31 @@ impl App {
                 }
                 Action::LoadMoreMails => {}
                 Action::NextMail | Action::PrevMail => {}
+                Action::ToggleFlag => {
+                    if self.mode == Mode::MailList {
+                        if let Some((uid, flagged)) = self.mail_list.toggle_flag() {
+                            let folder = self.mail_list.current_folder.clone();
+                            let flag = mail_protocol::MailFlag::Flagged;
+                            let _ = if flagged {
+                                self.mail_client.add_flags(&folder, &[uid], &[flag]).await
+                            } else {
+                                self.mail_client.remove_flags(&folder, &[uid], &[flag]).await
+                            };
+                        }
+                    } else if self.mode == Mode::MailView {
+                        if let Some(ref mail) = self.mail_view.mail {
+                            let folder = mail.folder.clone();
+                            let uid = mail.uid;
+                            let flagged = mail.flags.contains(&mail_protocol::MailFlag::Flagged);
+                            let flag = mail_protocol::MailFlag::Flagged;
+                            let _ = if flagged {
+                                self.mail_client.remove_flags(&folder, &[uid], &[flag]).await
+                            } else {
+                                self.mail_client.add_flags(&folder, &[uid], &[flag]).await
+                            };
+                        }
+                    }
+                }
 
                 // ── 导航 ──
                 Action::Back => {
@@ -424,19 +520,20 @@ impl App {
 
                 _ => {}
             }
-        }
 
-        // 每 Tick 更新活跃组件
-        if self.action_rx.is_empty() {
-            // 用 update 转发动作到活跃组件
-            let action = Action::Tick;
-            self.status_bar.update(action.clone())?;
+            // 将 action 转发给 StatusBar 更新状态
+            if action != Action::Tick && action != Action::Render {
+                self.status_bar.update(action.clone())?;
+            }
         }
 
         Ok(())
     }
 
     fn switch_mode(&mut self, new_mode: Mode) {
+        if new_mode == Mode::Home {
+            self.status_bar.clear_folder();
+        }
         self.mode = new_mode;
         self.status_bar.set_mode(new_mode);
         info!("切换到模式: {:?}", new_mode);

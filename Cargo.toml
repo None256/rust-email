@@ -17,6 +17,7 @@ build = "build.rs"
 
 [dependencies]
 mail-protocol = { path = "./mail-protocol" }
+utf7-imap = "0.3"
 better-panic = "0.3.0"
 clap = { version = "4.6.1", features = [
     "derive",

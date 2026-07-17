@@ -115,11 +115,11 @@ impl Component for AccountForm {
         }
 
         match key.code {
-            KeyCode::Tab | KeyCode::Down | KeyCode::Char('j') => {
+            KeyCode::Tab | KeyCode::Down => {
                 let total = self.fields.len() + 1; // +1 for security
                 self.focus = (self.focus + 1) % total;
             }
-            KeyCode::Up | KeyCode::Char('k') => {
+            KeyCode::Up => {
                 self.focus = self.focus.saturating_sub(1);
             }
             KeyCode::Enter => {

@@ -523,6 +523,7 @@ fn build_summary(fetch: &Fetch) -> EmailSummary {
         subject: envelope
             .and_then(|e| e.subject.as_ref())
             .map(bytes_to_string)
+            .map(|s| decode_mime_header(&s))
             .unwrap_or_default(),
         date: envelope
             .and_then(|e| e.date.as_ref())
@@ -535,7 +536,7 @@ fn build_summary(fetch: &Fetch) -> EmailSummary {
 }
 
 fn format_addr(addr: &Address<'_>) -> String {
-    let name = addr.name.as_ref().map(bytes_to_string);
+    let name = addr.name.as_ref().map(bytes_to_string).map(|s| decode_mime_header(&s));
     let mailbox = addr
         .mailbox
         .as_ref()
@@ -759,9 +760,81 @@ fn bytes_to_string(bytes: impl AsRef<[u8]>) -> String {
     String::from_utf8_lossy(bytes.as_ref()).into_owned()
 }
 
+/// 解码 MIME encoded-word（如 `=?UTF-8?B?5Lit5paH?=` → `中文`）
+fn decode_mime_header(raw: &str) -> String {
+    let mut result = String::new();
+    let mut pos = 0;
+    while pos < raw.len() {
+        if let Some(start) = raw[pos..].find("=?") {
+            result.push_str(&raw[pos..pos + start]);
+            let start = pos + start;
+            if let Some(end) = raw[start + 2..].find("?=") {
+                let end = start + 2 + end + 2;
+                let inner = &raw[start + 2..end - 2];
+                let parts: Vec<&str> = inner.splitn(3, '?').collect();
+                if parts.len() == 3 {
+                    let (charset, encoding, data) = (parts[0], parts[1], parts[2]);
+                    let decoded = match encoding {
+                        "B" | "b" => base64::Engine::decode(
+                            &base64::engine::general_purpose::STANDARD,
+                            data.as_bytes(),
+                        )
+                        .ok()
+                        .map(|v| decode_charset(&v, charset)),
+                        "Q" | "q" => {
+                            let mut bytes = Vec::new();
+                            let q_chars: Vec<char> = data.chars().collect();
+                            let mut i = 0;
+                            while i < q_chars.len() {
+                                if q_chars[i] == '=' && i + 2 < q_chars.len() {
+                                    if let Ok(b) = u8::from_str_radix(&data[i + 1..i + 3], 16) {
+                                        bytes.push(b);
+                                        i += 3;
+                                        continue;
+                                    }
+                                } else if q_chars[i] == '_' {
+                                    bytes.push(b' ');
+                                } else {
+                                    bytes.push(q_chars[i] as u8);
+                                }
+                                i += 1;
+                            }
+                            Some(decode_charset(&bytes, charset))
+                        }
+                        _ => None,
+                    };
+                    if let Some(text) = decoded {
+                        result.push_str(&text);
+                        pos = end;
+                        continue;
+                    }
+                }
+            }
+        }
+        // 找不到或解码失败，输出剩余
+        result.push_str(&raw[pos..]);
+        break;
+    }
+    result
+}
+
+/// 按字符集解码字节
+fn decode_charset(data: &[u8], charset: &str) -> String {
+    match charset.to_uppercase().as_str() {
+        "UTF-8" | "UTF8" => String::from_utf8_lossy(data).into_owned(),
+        "GBK" | "GB2312" | "GB18030" => {
+            String::from_utf8_lossy(data).into_owned()
+        }
+        "ISO-8859-1" | "LATIN1" => data.iter().map(|&b| b as char).collect(),
+        _ => String::from_utf8_lossy(data).into_owned(),
+    }
+}
+
 fn join_uids(uids: &[u32]) -> String {
     uids.iter()
         .map(|u| u.to_string())
         .collect::<Vec<_>>()
         .join(",")
 }
+
+
