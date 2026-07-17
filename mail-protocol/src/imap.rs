@@ -1,12 +1,15 @@
+use std::pin::Pin;
+
 use async_imap::{
     Client as ImapClientInner, Session as ImapSessionInner,
     types::{Fetch, Flag, Name},
 };
 use async_native_tls::{TlsConnector, TlsStream};
-use futures::StreamExt;
+use futures::{Stream, StreamExt};
 use imap_proto::types::Address;
 use mailparse::{ParsedMail, parse_content_disposition, parse_mail};
 use tokio::net::TcpStream;
+use tracing::{debug, error, info, warn};
 use tokio::sync::Mutex;
 use tokio_util::compat::TokioAsyncReadCompatExt;
 
@@ -55,28 +58,52 @@ impl MailBackend for MailClient {
         let mut inner = self.inner.lock().await;
 
         if let Some(mut session) = inner.session.take() {
+            info!("断开旧会话");
             let _ = session.logout().await;
         }
 
+        info!(
+            "连接 {}:{} (security={:?})",
+            config.imap_host, config.imap_port, config.security
+        );
+
         match config.security {
             SecurityMode::Tls => {
+                info!("TCP 连接 {}:{}...", config.imap_host, config.imap_port);
                 let tcp = TcpStream::connect((config.imap_host.as_str(), config.imap_port))
                     .await
-                    .map_err(|e| MailError::Connection(format!("TCP connect: {e}")))?;
+                    .map_err(|e| {
+                        error!("TCP 连接失败: {e}");
+                        MailError::Connection(format!("TCP connect: {e}"))
+                    })?;
+                info!("TCP 已连接");
 
                 let tls = TlsConnector::new();
                 let compat = tcp.compat();
                 let tls_stream = tls
                     .connect(&config.imap_host, compat)
                     .await
-                    .map_err(|e| MailError::Tls(format!("TLS handshake: {e}")))?;
+                    .map_err(|e| {
+                        error!("TLS 握手失败: {e}");
+                        MailError::Tls(format!("TLS handshake: {e}"))
+                    })?;
+                info!("TLS 握手成功");
 
                 let client = ImapClientInner::new(tls_stream);
-                let session = client
+                info!("IMAP 登录中...");
+                let mut session = client
                     .login(&config.username, &config.password)
                     .await
-                    .map_err(|(e, _)| MailError::Authentication(format!("login failed: {e}")))?;
+                    .map_err(|(e, _)| {
+                        error!("IMAP 登录失败: {e}");
+                        MailError::Authentication(format!("login failed: {e}"))
+                    })?;
+                info!("IMAP 登录成功");
 
+                match session.select("INBOX").await {
+                    Ok(_) => info!("连接后 SELECT INBOX 成功"),
+                    Err(e) => warn!("连接后 SELECT INBOX 失败: {e}"),
+                }
                 inner.config = Some(config.clone());
                 inner.session = Some(session);
                 Ok(())
@@ -100,11 +127,13 @@ impl MailBackend for MailClient {
                     .map_err(|e| MailError::Tls(format!("TLS handshake: {e}")))?;
 
                 let client = ImapClientInner::new(tls_stream);
-                let session = client
+                let mut session = client
                     .login(&config.username, &config.password)
                     .await
                     .map_err(|(e, _)| MailError::Authentication(format!("login failed: {e}")))?;
 
+                // 连接后验证：尝试 SELECT INBOX 确认会话可用
+                let _ = session.select("INBOX").await;
                 inner.config = Some(config.clone());
                 inner.session = Some(session);
                 Ok(())
@@ -140,21 +169,33 @@ impl MailBackend for MailClient {
         let mut inner = self.inner.lock().await;
         let session = inner.session.as_mut().ok_or(MailError::NotConnected)?;
 
-        let mut stream = session
-            .list(Some(""), Some("*"))
-            .await
-            .map_err(|e| MailError::Protocol(format!("LIST: {e}")))?;
+        info!("获取文件夹列表...");
+        let folders = {
+            let mut stream = session
+                .list(None, Some("*"))
+                .await
+                .map_err(|e| {
+                    error!("LIST 命令失败: {e}");
+                    MailError::Protocol(format!("LIST: {e}"))
+                })?;
 
-        let mut folders = Vec::new();
-        while let Some(item) = stream.next().await {
-            let name: Name = item.map_err(|e| MailError::Protocol(format!("LIST stream: {e}")))?;
-            folders.push(Folder {
-                name: name.name().to_string(),
-                delimiter: name.delimiter().unwrap_or("").to_string(),
-                attributes: name.attributes().iter().map(name_attr_to_string).collect(),
-            });
-        }
+            let mut folders = Vec::new();
+            while let Some(item) = stream.next().await {
+                let name: Name = item.map_err(|e| MailError::Protocol(format!("LIST stream: {e}")))?;
+                folders.push(Folder {
+                    name: name.name().to_string(),
+                    delimiter: name.delimiter().unwrap_or("").to_string(),
+                    attributes: name.attributes().iter().map(name_attr_to_string).collect(),
+                });
+            }
+            folders
+        };
 
+        info!(
+            "获取到 {} 个文件夹: {:?}",
+            folders.len(),
+            folders.iter().map(|f| &f.name).collect::<Vec<_>>()
+        );
         Ok(folders)
     }
 
@@ -198,8 +239,10 @@ impl MailBackend for MailClient {
         let mut inner = self.inner.lock().await;
         let session = inner.session.as_mut().ok_or(MailError::NotConnected)?;
 
+        info!("选择文件夹 '{folder}'...");
         let mailbox = select_mailbox(session, folder).await?;
         let total = mailbox.exists;
+        info!("文件夹 '{folder}' 共 {total} 封邮件");
         if total == 0 || count == 0 {
             return Ok(Vec::new());
         }
@@ -207,8 +250,11 @@ impl MailBackend for MailClient {
         let count = count.min(total);
         let start = total.saturating_sub(count) + 1;
         let sequence = format!("{start}:*");
+        debug!("FETCH 序列: {sequence}");
 
-        fetch_summaries_by_seq(session, &sequence).await
+        let summaries = fetch_summaries_by_seq(session, &sequence).await?;
+        info!("获取到 {} 封邮件摘要", summaries.len());
+        Ok(summaries)
     }
 
     async fn fetch_messages_before(
@@ -257,7 +303,7 @@ impl MailBackend for MailClient {
 
         let sequence = format!("{uid}");
         let mut stream = session
-            .uid_fetch(&sequence, "(UID FLAGS RFC822)")
+            .uid_fetch(&sequence, "(UID FLAGS BODY[])")
             .await
             .map_err(|e| MailError::Protocol(format!("UID FETCH: {e}")))?;
 
@@ -464,50 +510,89 @@ impl MailBackend for MailClient {
 use async_imap::types::Mailbox;
 
 async fn select_mailbox(session: &mut ImapSession, folder: &str) -> Result<Mailbox, MailError> {
+    debug!("SELECT '{folder}' 前发送 NOOP...");
+    match session.noop().await {
+        Ok(_) => debug!("NOOP 成功"),
+        Err(e) => warn!("NOOP 失败: {e}"),
+    }
+    debug!("SELECT '{folder}'...");
     session
         .select(folder)
         .await
-        .map_err(|e| MailError::FolderNotFound(format!("select '{folder}': {e}")))
+        .map_err(|e| {
+            error!("SELECT '{folder}' 失败: {e}");
+            MailError::FolderNotFound(format!("select '{folder}': {e}"))
+        })
 }
 
 async fn fetch_summaries_by_seq(
     session: &mut ImapSession,
     sequence: &str,
 ) -> Result<Vec<EmailSummary>, MailError> {
-    let query = "(UID FLAGS RFC822.SIZE ENVELOPE)";
-    let mut stream = session
-        .fetch(sequence, query)
-        .await
-        .map_err(|e| MailError::Protocol(format!("FETCH: {e}")))?;
-
-    let mut summaries = Vec::new();
-    while let Some(result) = stream.next().await {
-        let fetch: Fetch = result.map_err(|e| MailError::Protocol(format!("fetch: {e}")))?;
-        summaries.push(build_summary(&fetch));
-    }
-
-    summaries.sort_by(|a, b| b.uid.cmp(&a.uid));
-    Ok(summaries)
+    try_fetch_summaries(session, sequence, false).await
 }
 
 async fn fetch_summaries_by_uid(
     session: &mut ImapSession,
     sequence: &str,
 ) -> Result<Vec<EmailSummary>, MailError> {
-    let query = "(UID FLAGS RFC822.SIZE ENVELOPE)";
-    let mut stream = session
-        .uid_fetch(sequence, query)
-        .await
-        .map_err(|e| MailError::Protocol(format!("UID FETCH: {e}")))?;
+    try_fetch_summaries(session, sequence, true).await
+}
 
-    let mut summaries = Vec::new();
-    while let Some(result) = stream.next().await {
-        let fetch: Fetch = result.map_err(|e| MailError::Protocol(format!("fetch: {e}")))?;
-        summaries.push(build_summary(&fetch));
+async fn try_fetch_summaries(
+    session: &mut ImapSession,
+    sequence: &str,
+    by_uid: bool,
+) -> Result<Vec<EmailSummary>, MailError> {
+    // 优先 ENVELOPE → 降级 BODY.PEEK HEADER → 降级基本字段
+    for (i, query) in [
+        "(UID FLAGS RFC822.SIZE ENVELOPE)",
+        "(UID FLAGS RFC822.SIZE BODY.PEEK[HEADER.FIELDS (FROM TO CC SUBJECT DATE MESSAGE-ID)])",
+        "(UID FLAGS RFC822.SIZE)",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let method = if by_uid { "UID FETCH" } else { "FETCH" };
+        debug!("{method} (尝试 #{i}): {query}");
+        let result: Result<Vec<EmailSummary>, MailError> = async {
+            let mut stream: Pin<Box<dyn Stream<Item = Result<Fetch, async_imap::error::Error>> + Send + '_>> =
+                if by_uid {
+                    Box::pin(session.uid_fetch(sequence, query).await.map_err(|e| {
+                        MailError::Protocol(format!("UID FETCH: {e}"))
+                    })?)
+                } else {
+                    Box::pin(session.fetch(sequence, query).await.map_err(|e| {
+                        MailError::Protocol(format!("FETCH: {e}"))
+                    })?)
+                };
+            let mut summaries = Vec::new();
+            while let Some(item) = stream.next().await {
+                let fetch: Fetch =
+                    item.map_err(|e| MailError::Protocol(format!("fetch: {e}")))?;
+                summaries.push(build_summary(&fetch));
+            }
+            summaries.sort_by(|a, b| b.uid.cmp(&a.uid));
+            Ok(summaries)
+        }
+        .await;
+
+        match result {
+            Ok(summaries) => {
+                info!("FETCH 成功 (尝试 #{i}): {} 封邮件", summaries.len());
+                return Ok(summaries);
+            }
+            Err(ref e) if query.contains("ENVELOPE") => {
+                warn!("ENVELOPE 查询失败，降级重试: {e}");
+                continue;
+            }
+            Err(e) => {
+                error!("FETCH 最终失败: {e}");
+                return Err(e);
+            }
+        }
     }
-
-    summaries.sort_by(|a, b| b.uid.cmp(&a.uid));
-    Ok(summaries)
+    unreachable!()
 }
 
 async fn drain_store(
@@ -528,31 +613,32 @@ async fn drain_store(
 
 fn build_summary(fetch: &Fetch) -> EmailSummary {
     let envelope = fetch.envelope();
+    let header = fetch.header().map(bytes_to_string);
 
     EmailSummary {
         uid: fetch.uid.unwrap_or(0),
         message_id: envelope
             .and_then(|e| e.message_id.as_ref())
-            .map(bytes_to_string),
-        from: envelope
-            .and_then(|e| e.from.as_ref())
-            .map(|a| a.iter().map(format_addr).collect::<Vec<_>>().join(", "))
+            .map(bytes_to_string)
+            .or_else(|| parse_header_field(&header, "message-id")),
+        from: envelope_from(envelope)
+            .or_else(|| parse_header_field(&header, "from"))
             .unwrap_or_default(),
-        to: envelope
-            .and_then(|e| e.to.as_ref())
-            .map(|a| a.iter().map(format_addr).collect::<Vec<_>>().join(", "))
+        to: envelope_to(envelope)
+            .or_else(|| parse_header_field(&header, "to"))
             .unwrap_or_default(),
-        cc: envelope
-            .and_then(|e| e.cc.as_ref())
-            .map(|a| a.iter().map(format_addr).collect::<Vec<_>>().join(", ")),
+        cc: envelope_cc(envelope)
+            .or_else(|| parse_header_field(&header, "cc")),
         subject: envelope
             .and_then(|e| e.subject.as_ref())
             .map(bytes_to_string)
             .map(|s| decode_mime_header(&s))
+            .or_else(|| parse_header_field(&header, "subject"))
             .unwrap_or_default(),
         date: envelope
             .and_then(|e| e.date.as_ref())
             .map(bytes_to_string)
+            .or_else(|| parse_header_field(&header, "date"))
             .unwrap_or_default(),
         size: fetch.size.unwrap_or(0) as u64,
         flags: fetch.flags().map(parse_flag).collect(),
@@ -577,6 +663,37 @@ fn format_addr(addr: &Address<'_>) -> String {
     } else {
         name.unwrap_or_default()
     }
+}
+
+fn envelope_from(envelope: Option<&imap_proto::types::Envelope<'_>>) -> Option<String> {
+    let list = envelope?.from.as_ref()?;
+    let s: String = list.iter().map(format_addr).collect::<Vec<_>>().join(", ");
+    if s.is_empty() { None } else { Some(s) }
+}
+
+fn envelope_to(envelope: Option<&imap_proto::types::Envelope<'_>>) -> Option<String> {
+    let list = envelope?.to.as_ref()?;
+    let s: String = list.iter().map(format_addr).collect::<Vec<_>>().join(", ");
+    if s.is_empty() { None } else { Some(s) }
+}
+
+fn envelope_cc(envelope: Option<&imap_proto::types::Envelope<'_>>) -> Option<String> {
+    let list = envelope?.cc.as_ref()?;
+    if list.is_empty() { return None; }
+    Some(list.iter().map(format_addr).collect::<Vec<_>>().join(", "))
+}
+
+fn parse_header_field(raw: &Option<String>, name: &str) -> Option<String> {
+    let text = raw.as_ref()?;
+    let name_lower = name.to_lowercase();
+    for line in text.lines() {
+        if let Some((key, val)) = line.split_once(':') {
+            if key.trim().to_lowercase() == name_lower {
+                return Some(val.trim().to_string());
+            }
+        }
+    }
+    None
 }
 
 // ════════════════════════════════════════════════════════════════════

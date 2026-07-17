@@ -201,6 +201,9 @@ impl App {
                 // ── 系统动作 ──
                 Action::Tick => {
                     self.last_tick_key_events.drain(..);
+                    if self.mail_client.is_connected() {
+                        let _ = self.mail_client.noop().await;
+                    }
                 }
                 Action::Quit => self.should_quit = true,
                 Action::Suspend => self.should_suspend = true,
@@ -413,7 +416,7 @@ impl App {
                                 }
                             }
                             self.action_tx
-                                .send(Action::Error(format!("获取邮件失败: {e}")))?;
+                                .send(Action::Error(format!("获取 {name} 邮件列表失败: {e}")))?;
                         }
                     }
                 }
@@ -466,7 +469,7 @@ impl App {
                                     self.mail_view.set_mail(mail);
                                 } else {
                                     self.action_tx
-                                        .send(Action::Error(format!("获取邮件失败: {e}")))?;
+                                        .send(Action::Error(format!("查看 {folder}/{uid} 失败: {e}")))?;
                                     self.switch_mode(Mode::MailList);
                                 }
                             }

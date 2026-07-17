@@ -36,3 +36,6 @@ lettre = { version = "0.11", default-features = false, features = [
     "smtp-transport",
     "tokio1-native-tls",
 ] }
+
+# 日志
+tracing = "0.1"
