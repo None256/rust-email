@@ -27,15 +27,8 @@ pub fn init() -> color_eyre::Result<()> {
         .with_ansi(false)
         .with_filter(env_filter);
 
-    // stderr 输出 WARN 及以上（方便调试）
-    let stderr_layer = fmt::layer()
-        .with_target(false)
-        .with_level(true)
-        .with_filter(tracing::level_filters::LevelFilter::INFO);
-
     tracing_subscriber::registry()
         .with(file_layer)
-        .with(stderr_layer)
         .with(ErrorLayer::default())
         .try_init()?;
     Ok(())

@@ -89,7 +89,18 @@ impl MailBackend for MailClient {
                     })?;
                 info!("TLS 握手成功");
 
-                let client = ImapClientInner::new(tls_stream);
+                let mut client = ImapClientInner::new(tls_stream);
+                info!("发送 IMAP ID...");
+                client
+                    .run_command_and_check_ok(
+                        r#"ID ("name" "rust-email" "version" "0.1")"#,
+                        None,
+                    )
+                    .await
+                    .map_err(|e| {
+                        warn!("ID 命令失败: {e}");
+                        MailError::Protocol(format!("ID: {e}"))
+                    })?;
                 info!("IMAP 登录中...");
                 let mut session = client
                     .login(&config.username, &config.password)
@@ -126,7 +137,19 @@ impl MailBackend for MailClient {
                     .await
                     .map_err(|e| MailError::Tls(format!("TLS handshake: {e}")))?;
 
-                let client = ImapClientInner::new(tls_stream);
+                let mut client = ImapClientInner::new(tls_stream);
+                info!("发送 IMAP ID...");
+                client
+                    .run_command_and_check_ok(
+                        r#"ID ("name" "rust-email" "version" "0.1")"#,
+                        None,
+                    )
+                    .await
+                    .map_err(|e| {
+                        warn!("ID 命令失败: {e}");
+                        MailError::Protocol(format!("ID: {e}"))
+                    })?;
+                info!("IMAP 登录中...");
                 let mut session = client
                     .login(&config.username, &config.password)
                     .await
