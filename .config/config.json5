@@ -45,7 +45,7 @@
       "<r>": "Reply",
       "<a>": "ReplyAll",
       "<f>": "Forward",
-      "<d>": "DeleteMail",
+      // 'd' 由组件处理：有附件时下载，无附件时删除
       "<s>": "ToggleFlag",
       "<h>": "ShowHtml",           // HTML 视图
       "<t>": "ShowText",           // 纯文本视图

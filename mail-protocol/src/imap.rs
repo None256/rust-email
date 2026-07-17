@@ -579,11 +579,11 @@ fn split_addr_list(raw: &str) -> Vec<String> {
 
 fn extract_body_text(parsed: &ParsedMail<'_>) -> Option<String> {
     if is_text_plain(parsed) {
-        return parsed.get_body().ok();
+        return decode_body_part(parsed);
     }
     for part in &parsed.subparts {
         if is_text_plain(part) {
-            return part.get_body().ok();
+            return decode_body_part(part);
         }
         if let Some(body) = extract_body_text(part) {
             return Some(body);
@@ -594,17 +594,87 @@ fn extract_body_text(parsed: &ParsedMail<'_>) -> Option<String> {
 
 fn extract_body_html(parsed: &ParsedMail<'_>) -> Option<String> {
     if is_text_html(parsed) {
-        return parsed.get_body().ok();
+        return decode_body_part(parsed);
     }
     for part in &parsed.subparts {
         if is_text_html(part) {
-            return part.get_body().ok();
+            return decode_body_part(part);
         }
         if let Some(body) = extract_body_html(part) {
             return Some(body);
         }
     }
     None
+}
+
+/// 解码邮件正文部分：取原始字节（已解 transfer-encoding），
+/// 优先按 Content-Type 指定的 charset 解码，若结果含乱码则尝试常见编码
+fn decode_body_part(part: &ParsedMail<'_>) -> Option<String> {
+    let raw = part.get_body_raw().ok()?;
+    let declared_charset = part
+        .ctype
+        .params
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("charset"))
+        .map(|(_, v)| v.as_str())
+        .unwrap_or("");
+
+    // 先按声明编码解码
+    if !declared_charset.is_empty() {
+        let result = decode_charset(&raw, declared_charset);
+        if !looks_garbled(&result) {
+            return Some(result);
+        }
+    }
+
+    // 声明编码不可靠或未声明 → 依次尝试常见编码
+    let candidates: [&'static encoding_rs::Encoding; 5] = [
+        encoding_rs::GBK,
+        encoding_rs::UTF_8,
+        encoding_rs::BIG5,
+        encoding_rs::SHIFT_JIS,
+        encoding_rs::WINDOWS_1252,
+    ];
+    let candidate_names = ["GBK", "UTF-8", "Big5", "Shift_JIS", "WINDOWS-1252"];
+    for (encoding, name) in candidates.iter().zip(candidate_names.iter()) {
+        if declared_charset.eq_ignore_ascii_case(name) {
+            continue; // 已经试过了
+        }
+        let (decoded, _, _) = encoding.decode(&raw);
+        let decoded = decoded.into_owned();
+        if !looks_garbled(&decoded) {
+            return Some(decoded);
+        }
+    }
+
+    // 全部失败，返回第一个尝试的结果
+    let (fallback, _, _) = encoding_rs::GBK.decode(&raw);
+    Some(fallback.into_owned())
+}
+
+/// 简单启发式检测文本是否包含常见乱码特征
+fn looks_garbled(s: &str) -> bool {
+    if s.is_empty() {
+        return false;
+    }
+    let mut bad_count = 0u32;
+    let mut total = 0u32;
+    for ch in s.chars() {
+        total += 1;
+        let c = ch as u32;
+        // C1 control chars (0x80-0x9F) + ÃÂÂÂÂÂ等字符
+        if (0x80..=0x9F).contains(&c)
+            || c == 0xC2
+            || c == 0xC3
+            || c == 0xC4
+            || c == 0xC5
+            || c == 0xC6
+            || c == 0xC7
+        {
+            bad_count += 1;
+        }
+    }
+    total > 5 && bad_count > total / 4
 }
 
 fn extract_attachments(parsed: &ParsedMail<'_>) -> Vec<AttachmentMeta> {
@@ -669,6 +739,14 @@ fn collect_attachments(
 
     let content_id = get_header(parsed, "Content-ID");
 
+    // 如果文件名没有后缀，根据 MIME 类型补充
+    let filename = if !filename.contains('.') {
+        let ext = mime_to_ext(&parsed.ctype.mimetype);
+        format!("{filename}.{ext}")
+    } else {
+        filename
+    };
+
     out.push(AttachmentMeta {
         filename,
         mime_type: parsed.ctype.mimetype.clone(),
@@ -676,6 +754,40 @@ fn collect_attachments(
         content_id,
         part_id: parent_prefix.to_string(),
     });
+}
+
+/// 根据 MIME 类型返回常见文件后缀
+fn mime_to_ext(mime: &str) -> &'static str {
+    match mime.to_lowercase().as_str() {
+        "application/pdf" => "pdf",
+        "application/zip" => "zip",
+        "application/x-rar-compressed" => "rar",
+        "application/x-7z-compressed" => "7z",
+        "application/gzip" => "gz",
+        "application/x-tar" => "tar",
+        "application/msword" => "doc",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => "docx",
+        "application/vnd.ms-excel" => "xls",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => "xlsx",
+        "application/vnd.ms-powerpoint" => "ppt",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation" => "pptx",
+        "image/jpeg" => "jpg",
+        "image/png" => "png",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        "image/svg+xml" => "svg",
+        "image/bmp" => "bmp",
+        "image/tiff" => "tiff",
+        "text/plain" => "txt",
+        "text/html" => "html",
+        "text/csv" => "csv",
+        "text/calendar" => "ics",
+        "application/json" => "json",
+        "application/xml" | "text/xml" => "xml",
+        "application/octet-stream" => "bin",
+        // 如果都不匹配，用 bin
+        _ => "bin",
+    }
 }
 
 fn child_prefix(parent: &str, index: usize) -> String {
@@ -820,13 +932,53 @@ fn decode_mime_header(raw: &str) -> String {
 
 /// 按字符集解码字节
 fn decode_charset(data: &[u8], charset: &str) -> String {
-    match charset.to_uppercase().as_str() {
+    let charset = charset.to_uppercase();
+    match charset.as_str() {
         "UTF-8" | "UTF8" => String::from_utf8_lossy(data).into_owned(),
-        "GBK" | "GB2312" | "GB18030" => {
-            String::from_utf8_lossy(data).into_owned()
+        "GBK" | "GB2312" | "GB18030" | "GBK-EUC" | "CSGB2312" => {
+            encoding_rs::GBK.decode(data).0.into_owned()
         }
         "ISO-8859-1" | "LATIN1" => data.iter().map(|&b| b as char).collect(),
-        _ => String::from_utf8_lossy(data).into_owned(),
+        "SHIFT_JIS" | "SHIFT-JIS" | "SJIS" | "CSSHIFTJIS" => {
+            encoding_rs::SHIFT_JIS.decode(data).0.into_owned()
+        }
+        "EUC-JP" | "EUCJP" => {
+            encoding_rs::EUC_JP.decode(data).0.into_owned()
+        }
+        "BIG5" | "BIG5-HKSCS" | "CN-BIG5" | "CSBIG5" => {
+            encoding_rs::BIG5.decode(data).0.into_owned()
+        }
+        "WINDOWS-1252" => {
+            encoding_rs::WINDOWS_1252.decode(data).0.into_owned()
+        }
+        "KOI8-R" => {
+            encoding_rs::KOI8_R.decode(data).0.into_owned()
+        }
+        "KOI8-U" => {
+            encoding_rs::KOI8_U.decode(data).0.into_owned()
+        }
+        "ISO-8859-2" => {
+            encoding_rs::ISO_8859_2.decode(data).0.into_owned()
+        }
+        "ISO-8859-5" => {
+            encoding_rs::ISO_8859_5.decode(data).0.into_owned()
+        }
+        "ISO-8859-7" => {
+            encoding_rs::ISO_8859_7.decode(data).0.into_owned()
+        }
+        "ISO-8859-15" => {
+            encoding_rs::ISO_8859_15.decode(data).0.into_owned()
+        }
+        _ => {
+            // 尝试用 encoding_rs 的标签查找
+            let label = charset.as_str();
+            if let Some(encoding) = encoding_rs::Encoding::for_label(label.as_bytes()) {
+                encoding.decode(data).0.into_owned()
+            } else {
+                // 兜底：尝试按 UTF-8 解码
+                String::from_utf8_lossy(data).into_owned()
+            }
+        }
     }
 }
 

@@ -21,6 +21,9 @@ tokio-util = { version = "0.7", features = ["compat"] }
 # MIME 解析
 mailparse = "0.15"
 
+# 字符编码解码（GBK, GB2312 等）
+encoding_rs = "0.8"
+
 # Base64 解码（MIME encoded-word）
 base64 = "0.22"
 

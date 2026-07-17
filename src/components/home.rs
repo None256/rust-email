@@ -1,5 +1,4 @@
 use crossterm::event::{KeyCode, KeyEvent};
-use mail_protocol::AccountConfig;
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Layout, Rect},
@@ -10,14 +9,14 @@ use ratatui::{
 use tokio::sync::mpsc::UnboundedSender;
 
 use super::Component;
-use crate::{action::Action, config::Config};
+use crate::{action::Action, config::Config, database::Account};
 
 /// 首页 — 显示账户列表
 #[derive(Default)]
 pub struct Home {
     command_tx: Option<UnboundedSender<Action>>,
     config: Config,
-    pub accounts: Vec<AccountConfig>,
+    pub accounts: Vec<Account>,
     pub state: ListState,
 }
 
@@ -29,7 +28,7 @@ impl Home {
         }
     }
 
-    pub fn set_accounts(&mut self, accounts: Vec<AccountConfig>) {
+    pub fn set_accounts(&mut self, accounts: Vec<Account>) {
         let is_empty = accounts.is_empty();
         self.accounts = accounts;
         self.state.select(if is_empty { None } else { Some(0) });
@@ -109,11 +108,11 @@ impl Component for Home {
             );
         } else {
             let items: Vec<ListItem> = self.accounts.iter().map(|a| {
-                let name = if a.username.contains('@') { &a.username } else { &a.imap_host };
+                let name = a.display_name.clone().unwrap_or_else(|| a.email.clone());
                 ListItem::new(Line::from(vec![
                     Span::styled(" 📬 ", Style::default().fg(Color::Yellow)),
-                    Span::styled(format!(" {:<30}", name), Style::default().fg(Color::White)),
-                    Span::styled(format!(" ({})", a.imap_host), Style::default().fg(Color::DarkGray)),
+                    Span::styled(format!(" {:<30}", &name), Style::default().fg(Color::White)),
+                    Span::styled(format!(" ({})", a.config.imap_host), Style::default().fg(Color::DarkGray)),
                 ]))
             }).collect();
 
