@@ -127,7 +127,7 @@ impl Component for StatusBar {
         } else {
             let hint = match self.mode {
                 Mode::Home => "q:退出  ↑↓:选择  Enter:连接  a:添加  d:删除  c:写邮件",
-                Mode::AccountForm => "Tab/↑↓:切换  Enter:确认  Ctrl+S:保存  Esc:取消",
+                Mode::AccountForm => "↑↓/Tab:切换字段  Enter:下一项  Ctrl+S:保存  Esc:取消",
                 Mode::FolderList => "q:退出  j↓/k↑  Enter:进入  R:刷新",
                 Mode::MailList => "q:退出  j↓/k↑  Enter:查看  c:写邮件  r:回复  d:删除  s:星标",
                 Mode::MailView => "q:退出  r:回复  h:HTML  t:文本  j/k:上下  s:星标  E:保存HTML", 
