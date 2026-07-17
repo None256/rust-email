@@ -82,6 +82,10 @@ pub enum Action {
     // 取消编辑
     CancelCompose,
 
+    // ── 保存正文 ──
+    /// 将 HTML 正文保存为文件
+    SaveHtml,
+
     // ── 导航 ──
     // 返回上一级
     Back,

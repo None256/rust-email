@@ -133,7 +133,7 @@ impl Component for StatusBar {
                 Mode::AccountForm => "Tab/↑↓:切换  Enter:确认  Ctrl+S:保存  Esc:取消",
                 Mode::FolderList => "q:退出  j↓/k↑  Enter:进入  R:刷新",
                 Mode::MailList => "q:退出  j↓/k↑  Enter:查看  r:回复  d:删除  s:星标",
-                Mode::MailView => "q:退出  r:回复  d:删除  h:HTML  t:文本  j/k:上下  s:星标",
+                Mode::MailView => "q:退出  r:回复  h:HTML  t:文本  j/k:上下  s:星标  E:保存HTML", 
                 Mode::Compose => "Ctrl+S:发送  Esc:取消",
             };
             Line::from(Span::styled(hint, Style::default().fg(Color::DarkGray)))
@@ -146,7 +146,7 @@ impl Component for StatusBar {
 
 /// 右侧提示文字需要的宽度（取最长的提示）
 fn right_hint_width() -> u16 {
-    50 // 足够容纳最长的快捷键提示
+    65 // 足够容纳最长的快捷键提示
 }
 
 /// 文件夹名翻译

@@ -2892,6 +2892,7 @@ dependencies = [
  "async-native-tls",
  "async-trait",
  "base64 0.22.1",
+ "encoding_rs",
  "futures",
  "imap-proto",
  "lettre",

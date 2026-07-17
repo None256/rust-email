@@ -79,7 +79,6 @@ impl App {
     ) -> color_eyre::Result<Self> {
         let (action_tx, action_rx) = mpsc::unbounded_channel();
         let accounts = database::list_accounts(&database).await?;
-        let account_configs = accounts.iter().map(|a| a.config.clone()).collect();
 
         let mut app = Self {
             tick_rate,
@@ -105,7 +104,7 @@ impl App {
             action_tx,
             action_rx,
         };
-        app.home.set_accounts(account_configs);
+        app.home.set_accounts(app.accounts.clone());
         Ok(app)
     }
 
@@ -243,8 +242,7 @@ impl App {
                         };
                         database::save_account(&self.database, &account).await?;
                         self.accounts = database::list_accounts(&self.database).await?;
-                        self.home
-                            .set_accounts(self.accounts.iter().map(|a| a.config.clone()).collect());
+                        self.home.set_accounts(self.accounts.clone());
                         info!("已添加账户");
                     }
                     self.switch_mode(Mode::Home);
@@ -254,9 +252,7 @@ impl App {
                         if i < self.accounts.len() {
                             database::delete_account(&self.database, self.accounts[i].id).await?;
                             self.accounts.remove(i);
-                            self.home.set_accounts(
-                                self.accounts.iter().map(|a| a.config.clone()).collect(),
-                            );
+                            self.home.set_accounts(self.accounts.clone());
                             info!("已删除账户");
                         }
                     }
@@ -505,6 +501,38 @@ impl App {
                     }
                 }
 
+                // ── 保存 HTML 正文 ──
+                Action::SaveHtml => {
+                    if let Some(ref mail) = self.mail_view.mail {
+                        if let Some(html) = &mail.body_html {
+                            let subject = mail.subject.trim();
+                            let safe_name = if subject.is_empty() {
+                                format!("email_{}", mail.uid)
+                            } else {
+                                // 替换文件名中不允许的字符
+                                subject
+                                    .chars()
+                                    .map(|c| if ":<>/\\|?*\"".contains(c) { '_' } else { c })
+                                    .collect::<String>()
+                            };
+                            let desktop = std::env::var("USERPROFILE")
+                                .map(|p| std::path::PathBuf::from(p).join("Desktop"))
+                                .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
+                            let save_dir = desktop.join("rust-email-attachments");
+                            tokio::fs::create_dir_all(&save_dir).await?;
+                            let file_path = save_dir.join(format!("{}.html", &safe_name));
+                            // 构建完整的 HTML 文档
+                            let full_html = format!(
+                                "<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\">\n<title>{}</title>\n<style>body {{ font-family: sans-serif; padding: 20px; }}</style>\n</head><body>\n{}\n</body></html>",
+                                mail.subject, html
+                            );
+                            tokio::fs::write(&file_path, full_html.as_bytes()).await?;
+                            let msg = format!("✓ HTML 已保存: {}", file_path.display());
+                            info!("{msg}");
+                            self.action_tx.send(Action::Error(msg))?;
+                        }
+                    }
+                }
                 // ── 导航 ──
                 Action::Back => {
                     let prev = match self.mode {
