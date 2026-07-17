@@ -2,6 +2,7 @@ use crossterm::event::KeyEvent;
 use mail_protocol::{MailBackend, MailClient};
 use ratatui::prelude::Rect;
 use serde::{Deserialize, Serialize};
+use sqlx::SqlitePool;
 use tokio::sync::mpsc;
 use tracing::{debug, info};
 
@@ -10,10 +11,11 @@ use mail_protocol::AccountConfig;
 use crate::{
     action::Action,
     components::{
-        account_form::AccountForm, folder_list::FolderList, fps::FpsCounter, home::Home,
-        mail_list::MailList, mail_view::MailView, status_bar::StatusBar, Component,
+        Component, account_form::AccountForm, folder_list::FolderList, fps::FpsCounter, home::Home,
+        mail_list::MailList, mail_view::MailView, status_bar::StatusBar,
     },
     config::Config,
+    database::{self, Account, NewAccount},
     tui::{Event, Tui},
 };
 
@@ -38,7 +40,9 @@ pub struct App {
     connecting: bool,
 
     // 内存账户管理
-    accounts: Vec<AccountConfig>,
+    accounts: Vec<Account>,
+    active_account_id: Option<i64>,
+    database: SqlitePool,
 
     // 邮件客户端
     mail_client: MailClient,
@@ -67,10 +71,16 @@ pub enum Mode {
 }
 
 impl App {
-    pub fn new(tick_rate: f64, frame_rate: f64) -> color_eyre::Result<Self> {
+    pub async fn new(
+        tick_rate: f64,
+        frame_rate: f64,
+        database: SqlitePool,
+    ) -> color_eyre::Result<Self> {
         let (action_tx, action_rx) = mpsc::unbounded_channel();
+        let accounts = database::list_accounts(&database).await?;
+        let account_configs = accounts.iter().map(|a| a.config.clone()).collect();
 
-        Ok(Self {
+        let mut app = Self {
             tick_rate,
             frame_rate,
             home: Home::new(),
@@ -85,12 +95,16 @@ impl App {
             config: Config::new()?,
             mode: Mode::Home,
             connecting: false,
-            accounts: Vec::new(),
+            accounts,
+            active_account_id: None,
+            database,
             mail_client: MailClient::new(),
             last_tick_key_events: Vec::new(),
             action_tx,
             action_rx,
-        })
+        };
+        app.home.set_accounts(account_configs);
+        Ok(app)
     }
 
     pub async fn run(&mut self) -> color_eyre::Result<()> {
@@ -219,8 +233,16 @@ impl App {
                                 _ => mail_protocol::SecurityMode::Tls,
                             },
                         };
-                        self.accounts.push(config);
-                        self.home.set_accounts(self.accounts.clone());
+                        let account = NewAccount {
+                            email: data.email,
+                            display_name: (!data.display_name.is_empty())
+                                .then_some(data.display_name),
+                            config,
+                        };
+                        database::save_account(&self.database, &account).await?;
+                        self.accounts = database::list_accounts(&self.database).await?;
+                        self.home
+                            .set_accounts(self.accounts.iter().map(|a| a.config.clone()).collect());
                         info!("已添加账户");
                     }
                     self.switch_mode(Mode::Home);
@@ -228,8 +250,11 @@ impl App {
                 Action::DeleteAccount => {
                     if let Some(i) = self.home.selected_index() {
                         if i < self.accounts.len() {
+                            database::delete_account(&self.database, self.accounts[i].id).await?;
                             self.accounts.remove(i);
-                            self.home.set_accounts(self.accounts.clone());
+                            self.home.set_accounts(
+                                self.accounts.iter().map(|a| a.config.clone()).collect(),
+                            );
                             info!("已删除账户");
                         }
                     }
@@ -238,13 +263,19 @@ impl App {
                 // ── 连接管理 ──
                 Action::Connect if !self.connecting => {
                     self.connecting = true;
-                    let config = match self.home.selected_index()
+                    let config = match self
+                        .home
+                        .selected_index()
                         .and_then(|i| self.accounts.get(i))
                     {
-                        Some(c) => c.clone(),
+                        Some(account) => {
+                            self.active_account_id = Some(account.id);
+                            account.config.clone()
+                        }
                         None => {
                             self.connecting = false;
-                            self.action_tx.send(Action::ConnectionFailed("请先添加一个账户".into()))?;
+                            self.action_tx
+                                .send(Action::ConnectionFailed("请先添加一个账户".into()))?;
                             break;
                         }
                     };
@@ -266,10 +297,23 @@ impl App {
                     match self.mail_client.list_folders().await {
                         Ok(folders) => {
                             info!("获取到 {} 个文件夹", folders.len());
+                            if let Some(account_id) = self.active_account_id {
+                                database::cache_folders(&self.database, account_id, &folders)
+                                    .await?;
+                            }
                             self.folder_list.set_folders(folders);
                             self.switch_mode(Mode::FolderList);
                         }
                         Err(e) => {
+                            if let Some(account_id) = self.active_account_id {
+                                let folders =
+                                    database::cached_folders(&self.database, account_id).await?;
+                                if !folders.is_empty() {
+                                    self.folder_list.set_folders(folders);
+                                    self.switch_mode(Mode::FolderList);
+                                    continue;
+                                }
+                            }
                             self.action_tx
                                 .send(Action::Error(format!("获取文件夹失败: {e}")))?;
                         }
@@ -289,25 +333,45 @@ impl App {
                     match self.mail_client.fetch_latest_messages(name, 50).await {
                         Ok(mails) => {
                             info!("获取到 {} 封邮件", mails.len());
+                            if let Some(account_id) = self.active_account_id {
+                                database::cache_email_summaries(
+                                    &self.database,
+                                    account_id,
+                                    name,
+                                    &mails,
+                                )
+                                .await?;
+                            }
                             self.mail_list.set_mails(mails);
                         }
                         Err(e) => {
+                            if let Some(account_id) = self.active_account_id {
+                                let mails = database::cached_email_summaries(
+                                    &self.database,
+                                    account_id,
+                                    name,
+                                    50,
+                                )
+                                .await?;
+                                if !mails.is_empty() {
+                                    self.mail_list.set_mails(mails);
+                                    continue;
+                                }
+                            }
                             self.action_tx
                                 .send(Action::Error(format!("获取邮件失败: {e}")))?;
                         }
                     }
                 }
-                Action::RefreshFolders => {
-                    match self.mail_client.list_folders().await {
-                        Ok(folders) => {
-                            self.folder_list.set_folders(folders);
-                        }
-                        Err(e) => {
-                            self.action_tx
-                                .send(Action::Error(format!("刷新文件夹失败: {e}")))?;
-                        }
+                Action::RefreshFolders => match self.mail_client.list_folders().await {
+                    Ok(folders) => {
+                        self.folder_list.set_folders(folders);
                     }
-                }
+                    Err(e) => {
+                        self.action_tx
+                            .send(Action::Error(format!("刷新文件夹失败: {e}")))?;
+                    }
+                },
 
                 // ── 邮件列表 ──
                 Action::LoadMails => {}
@@ -318,12 +382,26 @@ impl App {
                         info!("获取邮件 UID={} 来自 {}", uid, folder);
                         match self.mail_client.fetch_message(&folder, uid).await {
                             Ok(mail) => {
+                                if let Some(account_id) = self.active_account_id {
+                                    database::cache_email(&self.database, account_id, &mail)
+                                        .await?;
+                                }
                                 self.mail_view.set_mail(mail);
                             }
                             Err(e) => {
-                                self.action_tx
-                                    .send(Action::Error(format!("获取邮件失败: {e}")))?;
-                                self.switch_mode(Mode::MailList);
+                                let cached = if let Some(account_id) = self.active_account_id {
+                                    database::cached_email(&self.database, account_id, &folder, uid)
+                                        .await?
+                                } else {
+                                    None
+                                };
+                                if let Some(mail) = cached {
+                                    self.mail_view.set_mail(mail);
+                                } else {
+                                    self.action_tx
+                                        .send(Action::Error(format!("获取邮件失败: {e}")))?;
+                                    self.switch_mode(Mode::MailList);
+                                }
                             }
                         }
                     }

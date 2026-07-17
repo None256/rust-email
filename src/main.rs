@@ -22,8 +22,8 @@ async fn main() -> color_eyre::Result<()> {
     crate::logging::init()?;
 
     let args = Cli::parse();
-    let _database = database::connect(&config::get_data_dir().join("rust-email.db")).await?;
-    let mut app = App::new(args.tick_rate, args.frame_rate)?;
+    let database = database::connect(&config::get_data_dir().join("rust-email.db")).await?;
+    let mut app = App::new(args.tick_rate, args.frame_rate, database).await?;
     app.run().await?;
     Ok(())
 }
