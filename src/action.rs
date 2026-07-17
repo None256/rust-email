@@ -82,6 +82,14 @@ pub enum Action {
     // 取消编辑
     CancelCompose,
 
+    // ── 附件 ──
+    /// 下载指定附件 (索引)
+    DownloadAttachment(usize),
+    /// 添加附件（写邮件时）
+    AddAttachment(String),
+    /// 移除已添加的附件 (索引)
+    RemoveAttachment(usize),
+
     // ── 保存正文 ──
     /// 将 HTML 正文保存为文件
     SaveHtml,

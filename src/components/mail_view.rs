@@ -1,3 +1,5 @@
+use crossterm::event::{KeyCode, KeyEvent};
+use mail_protocol::Email;
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
@@ -13,10 +15,12 @@ use crate::action::Action;
 #[derive(Default)]
 pub struct MailView {
     command_tx: Option<UnboundedSender<Action>>,
-    pub mail: Option<mail_protocol::Email>,
+    pub mail: Option<Email>,
     pub current_folder: String,
     show_html: bool,
     scroll: u16,
+    /// 附件列表选中索引
+    attachment_idx: usize,
 }
 
 impl MailView {
@@ -24,9 +28,10 @@ impl MailView {
         Self::default()
     }
 
-    pub fn set_mail(&mut self, mail: mail_protocol::Email) {
+    pub fn set_mail(&mut self, mail: Email) {
         self.mail = Some(mail);
         self.scroll = 0;
+        self.attachment_idx = 0;
     }
 
     fn scroll_down(&mut self) {
@@ -65,7 +70,6 @@ fn decode_html_entities(text: &str) -> String {
             } else {
                 (false, start)
             };
-            // 找到结束的 ;
             let mut j = num_start;
             while j < len && chars[j] != ';' {
                 j += 1;
@@ -91,31 +95,54 @@ fn decode_html_entities(text: &str) -> String {
     result
 }
 
+fn format_size(bytes: u64) -> String {
+    if bytes >= 1_048_576 {
+        format!("{:.1} MB", bytes as f64 / 1_048_576.0)
+    } else if bytes >= 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
 impl Component for MailView {
     fn register_action_handler(&mut self, tx: UnboundedSender<Action>) -> color_eyre::Result<()> {
         self.command_tx = Some(tx);
         Ok(())
     }
 
-    fn handle_key_event(&mut self, key: crossterm::event::KeyEvent) -> color_eyre::Result<Option<Action>> {
+    fn handle_key_event(&mut self, key: KeyEvent) -> color_eyre::Result<Option<Action>> {
+        let has_attachments = self.mail.as_ref().map_or(false, |m| !m.attachments.is_empty());
+        let att_count = self.mail.as_ref().map_or(0, |m| m.attachments.len());
+
         match key.code {
-            crossterm::event::KeyCode::Char('j') | crossterm::event::KeyCode::Down => {
+            KeyCode::Char('j') | KeyCode::Down => {
                 self.scroll_down();
             }
-            crossterm::event::KeyCode::Char('k') | crossterm::event::KeyCode::Up => {
+            KeyCode::Char('k') | KeyCode::Up => {
                 self.scroll_up();
             }
-            crossterm::event::KeyCode::Char('h') => {
+            KeyCode::Char('h') => {
                 self.show_html = true;
             }
-            crossterm::event::KeyCode::Char('t') => {
+            KeyCode::Char('t') => {
                 self.show_html = false;
             }
-
-            crossterm::event::KeyCode::Char('E') => {
+            KeyCode::Char('E') => {
                 if self.mail.as_ref().map_or(false, |m| m.body_html.is_some()) {
                     return Ok(Some(Action::SaveHtml));
                 }
+            }
+
+            // 附件操作
+            KeyCode::Char('o') if has_attachments => {
+                return Ok(Some(Action::DownloadAttachment(self.attachment_idx)));
+            }
+            KeyCode::Left if has_attachments && self.attachment_idx > 0 => {
+                self.attachment_idx -= 1;
+            }
+            KeyCode::Right if has_attachments && self.attachment_idx + 1 < att_count => {
+                self.attachment_idx += 1;
             }
             _ => {}
         }
@@ -143,12 +170,22 @@ impl Component for MailView {
             return Ok(());
         };
 
-        // 上下分区：邮件头 + 正文
-        let chunks: [Rect; 2] = Layout::vertical([
-            Constraint::Length(7),                        // 邮件头
-            Constraint::Min(1),                           // 正文
-        ])
-        .areas(area);
+        let has_attachments = !mail.attachments.is_empty();
+
+        // 分区：邮件头 + 正文 + (附件区)
+        let constraints: Vec<Constraint> = if has_attachments {
+            vec![
+                Constraint::Length(5),  // 邮件头
+                Constraint::Min(7),     // 正文
+                Constraint::Length(3 + mail.attachments.len().min(5) as u16), // 附件区
+            ]
+        } else {
+            vec![
+                Constraint::Length(5),  // 邮件头
+                Constraint::Min(1),     // 正文
+            ]
+        };
+        let chunks = Layout::vertical(constraints).split(area);
         let (header_area, body_area) = (chunks[0], chunks[1]);
 
         // ── 邮件头 ──
@@ -192,7 +229,6 @@ impl Component for MailView {
         );
 
         // ── 正文 ──
-        // 判断是否有真正可读的纯文本内容（很多 HTML 邮件的 body_text 是空字符串）
         let body_text = mail.body_text.as_deref().unwrap_or("");
         let has_readable_text = {
             let trimmed = body_text.trim();
@@ -204,7 +240,6 @@ impl Component for MailView {
         } else if has_readable_text {
             (decode_html_entities(body_text), false)
         } else if mail.body_html.is_some() {
-            // 只有 HTML 正文，提示用户切换视图
             let hint = vec![
                 "╔══════════════════════════════════════╗",
                 "║                                      ║",
@@ -231,6 +266,45 @@ impl Component for MailView {
                 .scroll((self.scroll, 0)),
             body_area,
         );
+
+        // ── 附件区 ──
+        if has_attachments {
+            let att_lines: Vec<Line> = mail
+                .attachments
+                .iter()
+                .enumerate()
+                .map(|(i, att)| {
+                    let selected = i == self.attachment_idx;
+                    let prefix = if selected { "▶ " } else { "  " };
+                    let size = format_size(att.size);
+                    let line = format!("{prefix}[{i}] {}  ({size})", att.filename);
+                    if selected {
+                        Line::from(Span::styled(
+                            line,
+                            Style::default().fg(Color::Yellow),
+                        ))
+                    } else {
+                        Line::from(Span::styled(line, Style::default().fg(Color::White)))
+                    }
+                })
+                .collect();
+
+            let hint = Line::from(Span::styled(
+                " ←→ 选择附件   o 保存选中附件   保存路径: 桌面/rust-email-attachments/",
+                Style::default().fg(Color::DarkGray),
+            ));
+
+            let mut all_lines = att_lines;
+            all_lines.push(Line::from(""));
+            all_lines.push(hint);
+
+            frame.render_widget(
+                Paragraph::new(Text::from(all_lines))
+                    .block(Block::default().borders(Borders::ALL).title(" 📎 附件 "))
+                    .wrap(Wrap { trim: false }),
+                chunks[2],
+            );
+        }
 
         Ok(())
     }

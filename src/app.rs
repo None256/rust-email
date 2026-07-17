@@ -1,12 +1,12 @@
 use crossterm::event::KeyEvent;
-use mail_protocol::{MailBackend, MailClient};
+use mail_protocol::{AccountConfig, AttachmentData, MailBackend, MailClient};
 use ratatui::prelude::Rect;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use tokio::sync::mpsc;
 use tracing::{debug, error, info};
 
-use mail_protocol::AccountConfig;
+use std::path::Path;
 
 use crate::{
     action::Action,
@@ -553,6 +553,71 @@ impl App {
                     }
                 }
 
+                // ── 附件下载 ──
+                Action::DownloadAttachment(idx) => {
+                    if let Some(ref mail) = self.mail_view.mail {
+                        if let Some(att) = mail.attachments.get(*idx) {
+                            let save_dir = save_dir();
+                            tokio::fs::create_dir_all(&save_dir).await?;
+                            let file_path = save_dir.join(&att.filename);
+                            match self
+                                .mail_client
+                                .fetch_attachment(&mail.folder, mail.uid, &att.part_id)
+                                .await
+                            {
+                                Ok(data) => {
+                                    if let Err(e) = tokio::fs::write(&file_path, &data).await {
+                                        error!("保存附件失败: {e}");
+                                        self.action_tx
+                                            .send(Action::Error(format!("保存失败: {e}")))?;
+                                    } else {
+                                        let msg =
+                                            format!("✓ 附件已保存: {}", file_path.display());
+                                        info!("{msg}");
+                                        self.action_tx.send(Action::Error(msg))?;
+                                    }
+                                }
+                                Err(e) => {
+                                    error!("下载附件失败: {e}");
+                                    self.action_tx
+                                        .send(Action::Error(format!("下载附件失败: {e}")))?;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // ── 附件添加/移除（写邮件） ──
+                Action::AddAttachment(path) => {
+                    let path = std::path::PathBuf::from(path);
+                    match tokio::fs::read(&path).await {
+                        Ok(data) => {
+                            let filename = path
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("attachment")
+                                .to_string();
+                            let mime_type = mime_from_ext(&filename);
+                            self.compose.add_attachment(AttachmentData {
+                                filename,
+                                mime_type,
+                                data,
+                                content_id: None,
+                            });
+                            let count = self.compose.attachments.len();
+                            self.action_tx
+                                .send(Action::Error(format!("已添加附件 ({count} 个)")))?;
+                        }
+                        Err(e) => {
+                            self.action_tx
+                                .send(Action::Error(format!("读取文件失败: {e}")))?;
+                        }
+                    }
+                }
+                Action::RemoveAttachment(idx) => {
+                    self.compose.remove_attachment(*idx);
+                }
+
                 // ── 保存 HTML 正文 ──
                 Action::SaveHtml => {
                     if let Some(ref mail) = self.mail_view.mail {
@@ -561,16 +626,12 @@ impl App {
                             let safe_name = if subject.is_empty() {
                                 format!("email_{}", mail.uid)
                             } else {
-                                // 替换文件名中不允许的字符
                                 subject
                                     .chars()
                                     .map(|c| if ":<>/\\|?*\"".contains(c) { '_' } else { c })
                                     .collect::<String>()
                             };
-                            let desktop = std::env::var("USERPROFILE")
-                                .map(|p| std::path::PathBuf::from(p).join("Desktop"))
-                                .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default());
-                            let save_dir = desktop.join("rust-email-attachments");
+                            let save_dir = save_dir();
                             tokio::fs::create_dir_all(&save_dir).await?;
                             let file_path = save_dir.join(format!("{}.html", &safe_name));
                             // 构建完整的 HTML 文档
@@ -643,4 +704,56 @@ impl App {
         })?;
         Ok(())
     }
+}
+
+fn save_dir() -> std::path::PathBuf {
+    std::env::var("USERPROFILE")
+        .map(|p| std::path::PathBuf::from(p).join("Desktop").join("rust-email-attachments"))
+        .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default().join("rust-email-attachments"))
+}
+
+fn mime_from_ext(filename: &str) -> String {
+    let ext = Path::new(filename)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    match ext.as_str() {
+        "pdf" => "application/pdf",
+        "zip" => "application/zip",
+        "rar" => "application/x-rar-compressed",
+        "7z" => "application/x-7z-compressed",
+        "gz" | "tgz" => "application/gzip",
+        "tar" => "application/x-tar",
+        "doc" => "application/msword",
+        "docx" => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xls" => "application/vnd.ms-excel",
+        "xlsx" => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "ppt" => "application/vnd.ms-powerpoint",
+        "pptx" => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "jpg" | "jpeg" => "image/jpeg",
+        "png" => "image/png",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "svg" => "image/svg+xml",
+        "bmp" => "image/bmp",
+        "tiff" | "tif" => "image/tiff",
+        "ico" => "image/x-icon",
+        "mp4" => "video/mp4",
+        "webm" => "video/webm",
+        "avi" => "video/x-msvideo",
+        "mp3" => "audio/mpeg",
+        "wav" => "audio/wav",
+        "ogg" => "audio/ogg",
+        "flac" => "audio/flac",
+        "txt" => "text/plain",
+        "html" | "htm" => "text/html",
+        "css" => "text/css",
+        "js" => "application/javascript",
+        "json" => "application/json",
+        "xml" => "application/xml",
+        "csv" => "text/csv",
+        _ => "application/octet-stream",
+    }
+    .to_string()
 }

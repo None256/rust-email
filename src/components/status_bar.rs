@@ -130,8 +130,8 @@ impl Component for StatusBar {
                 Mode::AccountForm => "↑↓/Tab:切换字段  Enter:下一项  Ctrl+S:保存  Esc:取消",
                 Mode::FolderList => "q:退出  j↓/k↑  Enter:进入  c:写邮件  R:刷新",
                 Mode::MailList => "q:退出  j↓/k↑  Enter:查看  c:写邮件  r:回复  d:删除  s:星标",
-                Mode::MailView => "q:退出  r:回复  h:HTML  t:文本  j/k:上下  s:星标  E:保存HTML", 
-                Mode::Compose => "Ctrl+S:发送  Esc:取消",
+                Mode::MailView => "q:退出  r:回复  h:HTML  t:文本  j/k:上下  s:星标  o:保存附件  E:保存HTML",
+                Mode::Compose => "Tab/↑↓:切换  Enter:换行/添加附件  Ctrl+S:发送  Esc:取消",
             };
             Line::from(Span::styled(hint, Style::default().fg(Color::DarkGray)))
         };
