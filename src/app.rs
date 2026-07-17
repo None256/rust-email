@@ -275,6 +275,12 @@ impl App {
                         self.compose = Compose::new();
                         self.compose.set_reply(&mail.from, &mail.subject);
                         self.switch_mode(Mode::Compose);
+                    } else if let Some(i) = self.mail_list.state.selected() {
+                        if let Some(summary) = self.mail_list.mails.get(i) {
+                            self.compose = Compose::new();
+                            self.compose.set_reply(&summary.from, &summary.subject);
+                            self.switch_mode(Mode::Compose);
+                        }
                     }
                 }
                 Action::ReplyAll => {
@@ -282,6 +288,13 @@ impl App {
                         self.compose = Compose::new();
                         self.compose.set_reply_all(&mail.from, &mail.to, &mail.subject);
                         self.switch_mode(Mode::Compose);
+                    } else if let Some(i) = self.mail_list.state.selected() {
+                        if let Some(summary) = self.mail_list.mails.get(i) {
+                            let to: Vec<String> = summary.to.split(',').map(|s| s.trim().to_string()).collect();
+                            self.compose = Compose::new();
+                            self.compose.set_reply_all(&summary.from, &to, &summary.subject);
+                            self.switch_mode(Mode::Compose);
+                        }
                     }
                 }
                 Action::Forward => {
@@ -289,6 +302,12 @@ impl App {
                         self.compose = Compose::new();
                         self.compose.set_forward(&mail.subject);
                         self.switch_mode(Mode::Compose);
+                    } else if let Some(i) = self.mail_list.state.selected() {
+                        if let Some(summary) = self.mail_list.mails.get(i) {
+                            self.compose = Compose::new();
+                            self.compose.set_forward(&summary.subject);
+                            self.switch_mode(Mode::Compose);
+                        }
                     }
                 }
                 Action::Send => {

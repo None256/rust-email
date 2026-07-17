@@ -184,55 +184,95 @@ impl Component for Compose {
         );
 
         // 表单字段列表
-        let mut items: Vec<ListItem> = self
-            .fields
-            .iter()
-            .enumerate()
-            .map(|(i, f)| {
-                let focused = i == self.focus;
-                let display_val = if i == 4 {
-                    // 正文区：显示前几行
-                    let lines: Vec<&str> = f.value.lines().collect();
-                    let preview = if lines.len() > 5 {
-                        format!("{}… ({}/{})", lines[..3].join("\n"), lines.len(), f.value.len())
-                    } else {
-                        f.value.clone()
-                    };
-                    preview
-                } else if f.value.is_empty() && !focused {
+        let mut items: Vec<ListItem> = Vec::new();
+        let prefix_style = Style::default().fg(Color::Cyan);
+
+        for (i, f) in self.fields.iter().enumerate() {
+            let focused = i == self.focus;
+            let val_style = if focused {
+                Style::default().fg(Color::White).bg(Color::DarkGray)
+            } else {
+                Style::default().fg(Color::White)
+            };
+
+            if i == 4 {
+                // 正文区：多行显示，支持换行
+                let lines: Vec<Line> = if f.value.is_empty() && !focused {
+                    // 无焦点 + 空白：显示占位提示
+                    vec![Line::from(vec![
+                        Span::styled("  ", prefix_style),
+                        Span::styled(" 正文  ", prefix_style),
+                        Span::styled(" <输入正文>", val_style),
+                    ])]
+                } else if f.value.is_empty() && focused {
+                    // 有焦点 + 空白：显示标签 + 光标
+                    vec![Line::from(vec![
+                        Span::styled("▸ ", prefix_style),
+                        Span::styled(" 正文  ", prefix_style),
+                        Span::styled("|", val_style),
+                    ])]
+                } else {
+                    let mut all_lines: Vec<&str> = f.value.lines().collect();
+                    // .lines() 不保留末尾换行后的空行，手动补上
+                    if f.value.ends_with('\n') {
+                        all_lines.push("");
+                    }
+                    let total = all_lines.len();
+                    let display_lines: &[&str] = if total > 30 { &all_lines[..30] } else { &all_lines };
+                    let mut result: Vec<Line> = Vec::with_capacity(display_lines.len() + 1);
+                    for (li, line) in display_lines.iter().enumerate() {
+                        let is_last = li == display_lines.len() - 1;
+                        // 焦点在当前字段时，最后一行末尾加光标
+                        let text = if focused && is_last {
+                            format!("{}|", line)
+                        } else {
+                            line.to_string()
+                        };
+                        if li == 0 {
+                            result.push(Line::from(vec![
+                                Span::styled(if focused { "▸ " } else { "  " }, prefix_style),
+                                Span::styled(" 正文  ", prefix_style),
+                                Span::styled(text, val_style),
+                            ]));
+                        } else {
+                            result.push(Line::from(vec![
+                                Span::raw("        "),
+                                Span::styled(text, val_style),
+                            ]));
+                        }
+                    }
+                    if total > 30 {
+                        result.push(Line::from(vec![
+                            Span::raw("        "),
+                            Span::styled(
+                                format!("… 共 {} 行", total),
+                                Style::default().fg(Color::DarkGray),
+                            ),
+                        ]));
+                    }
+                    result
+                };
+                items.push(ListItem::new(Text::from(lines)));
+            } else {
+                // 普通字段：单行
+                let display_val = if f.value.is_empty() && !focused {
                     format!(" <输入{}>", f.label)
                 } else {
                     f.value.clone()
                 };
-                ListItem::new(Line::from(vec![
+                items.push(ListItem::new(Line::from(vec![
                     Span::styled(
                         if focused { "▸ " } else { "  " },
-                        Style::default().fg(Color::Cyan),
+                        prefix_style,
                     ),
                     Span::styled(
                         format!(" {:<6}", f.label),
-                        Style::default().fg(Color::Cyan),
+                        prefix_style,
                     ),
-                    Span::styled(
-                        display_val,
-                        if focused {
-                            Style::default()
-                                .fg(Color::White)
-                                .bg(Color::DarkGray)
-                        } else {
-                            Style::default().fg(Color::White)
-                        },
-                    ),
-                ]))
-            })
-            .collect();
-
-        // 添加附件列表（预留）
-        items.push(ListItem::new(Line::from(vec![
-            Span::raw("  "),
-            Span::styled("附件  ", Style::default().fg(Color::DarkGray)),
-            Span::styled("暂不支持附件", Style::default().fg(Color::DarkGray)),
-        ])));
+                    Span::styled(display_val, val_style),
+                ])));
+            }
+        }
 
         let list_mode = if self.forward { " 转发 " } else if self.reply_all { " 回复全部 " } else if self.reply_to.is_some() { " 回复 " } else { " 新邮件 " };
         frame.render_widget(

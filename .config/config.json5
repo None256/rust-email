@@ -7,7 +7,6 @@
       "<Ctrl-c>": "Quit",
       "<Ctrl-z>": "Suspend",
       "<Enter>": "Connect",        // 连接选中账户
-      "<c>": "Compose",            // 快速写邮件（需已连接）
     },
 
     // ── 文件夹列表 ──
@@ -17,6 +16,7 @@
       "<j>": "NextMail",           // 向下
       "<k>": "PrevMail",           // 向上
       "<Enter>": "LoadMails",      // 进入选中文件夹
+      "<c>": "Compose",            // 写邮件
       "<R>": "RefreshFolders",     // 刷新
     },
 
