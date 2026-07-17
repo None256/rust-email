@@ -118,12 +118,14 @@ pub struct AttachmentMeta {
     pub filename: String,
     /// MIME 类型
     pub mime_type: String,
-    /// 大小 (字节)
+    /// 大小 (字节, 解码后)
     pub size: u64,
     /// Content-ID (内嵌图片引用)
     pub content_id: Option<String>,
     /// IMAP body part 标识, 用于按需下载附件内容
     pub part_id: String,
+    /// Content-Transfer-Encoding (base64 / quoted-printable / 7bit / 8bit)
+    pub transfer_encoding: Option<String>,
 }
 
 /// 附件数据 — 发送邮件时的实际附件内容
@@ -248,11 +250,13 @@ pub trait MailBackend: Send + Sync {
     async fn fetch_message(&self, folder: &str, uid: u32) -> Result<Email, MailError>;
 
     /// 下载指定附件的原始内容
+    /// `encoding`: Content-Transfer-Encoding, 用于解码原始数据
     async fn fetch_attachment(
         &self,
         folder: &str,
         uid: u32,
         part_id: &str,
+        encoding: Option<&str>,
     ) -> Result<Vec<u8>, MailError>;
 
     // ---- 发送 ----

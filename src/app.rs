@@ -562,7 +562,7 @@ impl App {
                             let file_path = save_dir.join(&att.filename);
                             match self
                                 .mail_client
-                                .fetch_attachment(&mail.folder, mail.uid, &att.part_id)
+                                .fetch_attachment(&mail.folder, mail.uid, &att.part_id, att.transfer_encoding.as_deref())
                                 .await
                             {
                                 Ok(data) => {

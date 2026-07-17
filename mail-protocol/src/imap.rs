@@ -5,8 +5,9 @@ use async_imap::{
     types::{Fetch, Flag, Name},
 };
 use async_native_tls::{TlsConnector, TlsStream};
+use base64::Engine;
 use futures::{Stream, StreamExt};
-use imap_proto::types::Address;
+use imap_proto::types::{Address, SectionPath};
 use mailparse::{ParsedMail, parse_content_disposition, parse_mail};
 use tokio::net::TcpStream;
 use tracing::{debug, error, info, warn};
@@ -371,6 +372,7 @@ impl MailBackend for MailClient {
         folder: &str,
         uid: u32,
         part_id: &str,
+        encoding: Option<&str>,
     ) -> Result<Vec<u8>, MailError> {
         let mut inner = self.inner.lock().await;
         let session = inner.session.as_mut().ok_or(MailError::NotConnected)?;
@@ -392,7 +394,17 @@ impl MailBackend for MailClient {
             )))?
             .map_err(|e| MailError::Protocol(format!("fetch: {e}")))?;
 
-        Ok(fetch.body().unwrap_or(&[]).to_vec())
+        let path = SectionPath::Part(
+            part_id
+                .split('.')
+                .map(|n| n.parse::<u32>())
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|e| MailError::Protocol(format!("invalid part_id {part_id}: {e}")))?,
+            None,
+        );
+
+        let raw = fetch.section(&path).unwrap_or(&[]);
+        Ok(decode_transfer_encoding(raw, encoding))
     }
 
     // ── 发送 ────────────────────────────────────────────────────────
@@ -862,7 +874,7 @@ fn collect_attachments(
                 && h.get_value().to_lowercase().contains("attachment")
         });
 
-        if !is_attachment && parent_prefix.is_empty() {
+        if !is_attachment {
             for (i, part) in parsed.subparts.iter().enumerate() {
                 let prefix = child_prefix(parent_prefix, i);
                 collect_attachments(part, &prefix, out);
@@ -912,12 +924,16 @@ fn collect_attachments(
         filename
     };
 
+    let encoding = get_header(parsed, "Content-Transfer-Encoding");
+    let size = parsed.get_body().map(|b| b.len() as u64).unwrap_or(0);
+
     out.push(AttachmentMeta {
         filename,
         mime_type: parsed.ctype.mimetype.clone(),
-        size: parsed.get_body_raw().map(|b| b.len() as u64).unwrap_or(0),
+        size,
         content_id,
         part_id: parent_prefix.to_string(),
+        transfer_encoding: encoding,
     });
 }
 
@@ -1152,6 +1168,58 @@ fn join_uids(uids: &[u32]) -> String {
         .map(|u| u.to_string())
         .collect::<Vec<_>>()
         .join(",")
+}
+
+/// 解码 Content-Transfer-Encoding (base64 / quoted-printable)
+fn decode_transfer_encoding(data: &[u8], encoding: Option<&str>) -> Vec<u8> {
+    match encoding.map(|e| e.to_lowercase()) {
+        Some(ref e) if e == "base64" => {
+            let clean: String = String::from_utf8_lossy(data)
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .collect();
+            base64::engine::general_purpose::STANDARD
+                .decode(clean.as_bytes())
+                .unwrap_or_else(|_| data.to_vec())
+        }
+        Some(ref e) if e == "quoted-printable" => quoted_printable_decode(data),
+        _ => data.to_vec(),
+    }
+}
+
+fn quoted_printable_decode(data: &[u8]) -> Vec<u8> {
+    let mut result = Vec::with_capacity(data.len());
+    let mut i = 0;
+    let len = data.len();
+    while i < len {
+        match data[i] {
+            b'=' if i + 1 < len => {
+                if data[i + 1] == b'\r' && i + 2 < len && data[i + 2] == b'\n' {
+                    i += 3; // soft line break =\r\n
+                } else if data[i + 1] == b'\n' {
+                    i += 2; // soft line break =\n
+                } else if i + 2 < len {
+                    let hex = &data[i + 1..i + 3];
+                    if let Ok(b) = u8::from_str_radix(std::str::from_utf8(hex).unwrap_or("00"), 16)
+                    {
+                        result.push(b);
+                        i += 3;
+                    } else {
+                        result.push(data[i]);
+                        i += 1;
+                    }
+                } else {
+                    result.push(data[i]);
+                    i += 1;
+                }
+            }
+            b => {
+                result.push(b);
+                i += 1;
+            }
+        }
+    }
+    result
 }
 
 

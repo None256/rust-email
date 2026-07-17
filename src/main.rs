@@ -27,4 +27,5 @@ async fn main() -> color_eyre::Result<()> {
     let mut app = App::new(args.tick_rate, args.frame_rate, database).await?;
     app.run().await?;
     Ok(())
+
 }

@@ -152,9 +152,9 @@ pub async fn cache_email(
         .execute(&mut *tx)
         .await?;
     for a in &email.attachments {
-        sqlx::query("INSERT INTO attachments (message_id,filename,mime_type,size,content_id,part_id) VALUES (?,?,?,?,?,?)")
+        sqlx::query("INSERT INTO attachments (message_id,filename,mime_type,size,content_id,part_id,transfer_encoding) VALUES (?,?,?,?,?,?,?)")
             .bind(message_id).bind(&a.filename).bind(&a.mime_type).bind(i64::try_from(a.size).unwrap_or(i64::MAX))
-            .bind(&a.content_id).bind(&a.part_id).execute(&mut *tx).await?;
+            .bind(&a.content_id).bind(&a.part_id).bind(&a.transfer_encoding).execute(&mut *tx).await?;
     }
     tx.commit().await?;
     Ok(())
@@ -169,10 +169,11 @@ pub async fn cached_email(
     let row = sqlx::query("SELECT m.id,m.uid,m.message_id,m.sender,m.recipients,m.cc,m.bcc,m.reply_to,m.subject,m.sent_at,m.flags,m.body_text,m.body_html,m.in_reply_to,m.references_json FROM messages m JOIN folders f ON f.id=m.folder_id WHERE f.account_id=? AND f.name=? AND m.uid=?")
         .bind(account_id).bind(folder).bind(i64::from(uid)).fetch_optional(pool).await?;
     let Some(r) = row else { return Ok(None) };
-    let attachments = sqlx::query("SELECT filename,mime_type,size,content_id,part_id FROM attachments WHERE message_id=? ORDER BY id")
+    let attachments = sqlx::query("SELECT filename,mime_type,size,content_id,part_id,transfer_encoding FROM attachments WHERE message_id=? ORDER BY id")
         .bind(r.try_get::<i64,_>("id")?).fetch_all(pool).await?.into_iter().map(|a| Ok(AttachmentMeta {
             filename: a.try_get("filename")?, mime_type: a.try_get("mime_type")?,
             size: u64::try_from(a.try_get::<i64,_>("size")?).unwrap_or_default(), content_id: a.try_get("content_id")?, part_id: a.try_get("part_id")?,
+            transfer_encoding: a.try_get("transfer_encoding")?,
         })).collect::<color_eyre::Result<Vec<_>>>()?;
     Ok(Some(Email {
         uid: r.try_get::<i64, _>("uid")? as u32,
