@@ -143,7 +143,7 @@ impl Component for StatusBar {
 
 /// 右侧提示文字需要的宽度（取最长的提示）
 fn right_hint_width() -> u16 {
-    65 // 足够容纳最长的快捷键提示
+    72 // 足够容纳最长的快捷键提示（MailView: 72列）
 }
 
 /// 文件夹名翻译
