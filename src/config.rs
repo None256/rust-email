@@ -106,8 +106,6 @@ pub fn get_data_dir() -> PathBuf {
 pub fn get_config_dir() -> PathBuf {
     let directory = if let Some(s) = CONFIG_FOLDER.clone() {
         s
-    } else if let Some(proj_dirs) = project_directory() {
-        proj_dirs.config_local_dir().to_path_buf()
     } else {
         PathBuf::from(".").join(".config")
     };
