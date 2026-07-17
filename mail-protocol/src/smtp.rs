@@ -6,6 +6,7 @@ use lettre::{
     },
     transport::smtp::{AsyncSmtpTransport, authentication::Credentials},
 };
+use tracing::{error, info};
 
 use crate::backend::{AccountConfig, OutgoingEmail, SecurityMode};
 use crate::error::MailError;
@@ -22,12 +23,17 @@ impl SmtpSender {
         let message = build_message(email)?;
         let transport = create_transport(config)?;
 
-        transport
-            .send(message)
-            .await
-            .map_err(|e| MailError::Network(format!("SMTP send failed: {e}")))?;
-
-        Ok(())
+        info!("SMTP 发送中: {} -> {:?}", config.smtp_host, email.to);
+        match transport.send(message).await {
+            Ok(_) => {
+                info!("SMTP 发送成功");
+                Ok(())
+            }
+            Err(e) => {
+                error!("SMTP 发送失败: {e}");
+                Err(MailError::Network(format!("SMTP send failed: {e}")))
+            }
+        }
     }
 }
 
@@ -43,13 +49,14 @@ fn create_transport(
     config: &AccountConfig,
 ) -> Result<AsyncSmtpTransport<lettre::Tokio1Executor>, MailError> {
     let credentials = Credentials::new(config.username.clone(), config.password.clone());
-    let relay = format!("{}:{}", config.smtp_host, config.smtp_port);
 
     let transport = match config.security {
-        SecurityMode::Tls => AsyncSmtpTransport::<lettre::Tokio1Executor>::relay(&relay)
-            .map_err(|e| MailError::Connection(format!("invalid SMTP relay: {e}")))?,
+        SecurityMode::Tls => {
+            AsyncSmtpTransport::<lettre::Tokio1Executor>::relay(&config.smtp_host)
+                .map_err(|e| MailError::Connection(format!("invalid SMTP relay: {e}")))?
+        }
         SecurityMode::StartTls => {
-            AsyncSmtpTransport::<lettre::Tokio1Executor>::starttls_relay(&relay)
+            AsyncSmtpTransport::<lettre::Tokio1Executor>::starttls_relay(&config.smtp_host)
                 .map_err(|e| MailError::Connection(format!("invalid SMTP relay: {e}")))?
         }
         SecurityMode::None => {

@@ -4,7 +4,7 @@ use ratatui::prelude::Rect;
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
 use tokio::sync::mpsc;
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 
 use mail_protocol::AccountConfig;
 
@@ -172,6 +172,10 @@ impl App {
     }
 
     fn handle_key_event(&mut self, key: KeyEvent) -> color_eyre::Result<()> {
+        // 文本输入模式下由组件完全接管按键处理
+        if matches!(self.mode, Mode::AccountForm | Mode::Compose) {
+            return Ok(());
+        }
         let action_tx = self.action_tx.clone();
         let Some(keymap) = self.config.keybindings.0.get(&self.mode) else {
             return Ok(());
@@ -305,6 +309,7 @@ impl App {
                                 );
                             }
                             Err(e) => {
+                                error!("SMTP 发送失败: {e}");
                                 self.action_tx.send(Action::Error(format!("发送失败: {e}")))?;
                             }
                         }
