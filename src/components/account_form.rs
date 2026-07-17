@@ -69,6 +69,11 @@ impl FormField {
     }
 }
 
+/// 基本字段数（邮箱、显示名称、用户名、密码）
+const BASIC_COUNT: usize = 4;
+/// 高级字段起始索引（IMAP 主机、IMAP 端口、SMTP 主机、SMTP 端口）
+const ADV_START: usize = 4;
+
 #[derive(Default)]
 pub struct AccountForm {
     command_tx: Option<UnboundedSender<Action>>,
@@ -82,21 +87,28 @@ pub struct AccountForm {
 
 impl AccountForm {
     pub fn new() -> Self {
+        // 字段顺序：基本 → 邮箱、显示名称、用户名、密码
+        //          高级 → IMAP 主机、IMAP 端口、SMTP 主机、SMTP 端口、安全模式
         Self {
             fields: vec![
-                FormField::new("邮箱", false),
-                FormField::new("显示名称", false),
-                FormField::new("IMAP 主机", false),
-                FormField::new("IMAP 端口", false),
-                FormField::new("SMTP 主机", false),
-                FormField::new("SMTP 端口", false),
-                FormField::new("用户名", false),
-                FormField::new("密码", true),
+                FormField::new("邮箱", false),         // 0
+                FormField::new("显示名称", false),      // 1
+                FormField::new("用户名", false),        // 2
+                FormField::new("密码", true),           // 3
+                FormField::new("IMAP 主机", false),     // 4
+                FormField::new("IMAP 端口", false),     // 5
+                FormField::new("SMTP 主机", false),     // 6
+                FormField::new("SMTP 端口", false),     // 7
             ],
             security_options: ["TLS (993/465)", "STARTTLS (143/587)", "无加密"],
             providers: build_provider_map(),
             ..Default::default()
         }
+    }
+
+    /// 总字段数（含安全模式行）
+    fn total_fields(&self) -> usize {
+        self.fields.len() + 1 // +1 for security
     }
 
     /// 根据输入的邮箱自动填充 IMAP/SMTP 配置
@@ -107,17 +119,17 @@ impl AccountForm {
             Some(p) => p,
             None => return,
         };
-        self.fields[2].value = info.imap_host.into();
-        self.fields[2].auto_filled = true;
-        self.fields[3].value = info.imap_port.to_string();
-        self.fields[3].auto_filled = true;
-        self.fields[4].value = info.smtp_host.into();
-        self.fields[4].auto_filled = true;
-        self.fields[5].value = info.smtp_port.to_string();
-        self.fields[5].auto_filled = true;
-        // 用户名默认填邮箱
-        if self.fields[6].value.is_empty() {
-            self.fields[6].value = email;
+        self.fields[ADV_START + 0].value = info.imap_host.into();     // IMAP 主机
+        self.fields[ADV_START + 0].auto_filled = true;
+        self.fields[ADV_START + 1].value = info.imap_port.to_string(); // IMAP 端口
+        self.fields[ADV_START + 1].auto_filled = true;
+        self.fields[ADV_START + 2].value = info.smtp_host.into();     // SMTP 主机
+        self.fields[ADV_START + 2].auto_filled = true;
+        self.fields[ADV_START + 3].value = info.smtp_port.to_string(); // SMTP 端口
+        self.fields[ADV_START + 3].auto_filled = true;
+        // 用户名默认填邮箱（字段 2）
+        if self.fields[2].value.is_empty() {
+            self.fields[2].value = email;
         }
         // 安全模式
         self.security_idx = match info.security {
@@ -134,12 +146,12 @@ impl AccountForm {
         Some(AccountFormData {
             email,
             display_name: self.fields[1].value.clone(),
-            imap_host: self.fields[2].value.clone(),
-            imap_port: self.fields[3].value.parse().unwrap_or(993),
-            smtp_host: self.fields[4].value.clone(),
-            smtp_port: self.fields[5].value.parse().unwrap_or(465),
-            username: if self.fields[6].value.is_empty() { self.fields[0].value.clone() } else { self.fields[6].value.clone() },
-            password: self.fields[7].value.clone(),
+            imap_host: self.fields[ADV_START + 0].value.clone(),
+            imap_port: self.fields[ADV_START + 1].value.parse().unwrap_or(993),
+            smtp_host: self.fields[ADV_START + 2].value.clone(),
+            smtp_port: self.fields[ADV_START + 3].value.parse().unwrap_or(465),
+            username: if self.fields[2].value.is_empty() { self.fields[0].value.clone() } else { self.fields[2].value.clone() },
+            password: self.fields[3].value.clone(),
             security: match self.security_idx { 1 => "start_tls", 2 => "none", _ => "tls" }.into(),
         })
     }
@@ -187,7 +199,7 @@ impl Component for AccountForm {
         match key.code {
             KeyCode::Tab | KeyCode::Down => {
                 let prev = self.focus;
-                let total = self.fields.len() + 1; // +1 for security
+                let total = self.total_fields();
                 self.focus = (self.focus + 1) % total;
                 // 离开邮箱字段时自动填充
                 if prev == 0 && !self.fields[0].value.is_empty() {
@@ -205,10 +217,10 @@ impl Component for AccountForm {
             KeyCode::Enter => {
                 let prev = self.focus;
                 if self.focus == self.fields.len() {
-                    // 切换安全模式
+                    // 安全模式行
                     self.security_idx = (self.security_idx + 1) % 3;
                 } else {
-                    let total = self.fields.len() + 1;
+                    let total = self.total_fields();
                     self.focus = (self.focus + 1) % total;
                 }
                 // 离开邮箱字段时自动填充
@@ -216,20 +228,19 @@ impl Component for AccountForm {
                     self.auto_fill();
                 }
             }
-            KeyCode::Char(c) if self.focus < self.fields.len() => {
+            KeyCode::Char(c) if self.focus < self.fields.len() && self.focus < self.total_fields() => {
                 self.fields[self.focus].value.push(c);
-                // 用户在自动填充字段输入时取消自动标记
                 if self.fields[self.focus].auto_filled {
                     self.fields[self.focus].auto_filled = false;
                 }
             }
-            KeyCode::Backspace if self.focus < self.fields.len() => {
+            KeyCode::Backspace if self.focus < self.fields.len() && self.focus < self.total_fields() => {
                 self.fields[self.focus].value.pop();
-                // 用户在自动填充字段输入时取消自动标记
                 if self.fields[self.focus].auto_filled {
                     self.fields[self.focus].auto_filled = false;
                 }
             }
+
             KeyCode::Esc => {
                 self.reset();
                 return Ok(Some(Action::Back));
@@ -246,7 +257,11 @@ impl Component for AccountForm {
     fn draw(&mut self, frame: &mut Frame, area: Rect) -> color_eyre::Result<()> {
         let chunks: [Rect; 3] = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Length(3), Constraint::Min(1), Constraint::Length(3)])
+            .constraints([
+                Constraint::Length(3),                              // 标题
+                Constraint::Length(BASIC_COUNT as u16 + 2),         // 基本设置区域
+                Constraint::Length((self.fields.len() - BASIC_COUNT + 1 + 2) as u16), // 高级设置区域
+            ])
             .areas(area);
 
         // 标题
@@ -258,55 +273,60 @@ impl Component for AccountForm {
             chunks[0],
         );
 
-        // 表单字段
-        let mut items: Vec<ListItem> = self.fields.iter().enumerate().map(|(i, f)| {
+        // ── 基本设置 ──
+        let basic_items: Vec<ListItem> = self.fields[..BASIC_COUNT].iter().enumerate().map(|(i, f)| {
             let focused = i == self.focus;
             let val = f.display();
             let display = if val.is_empty() && !focused {
                 format!(" <输入{}>", f.label)
-            } else if f.auto_filled && !focused {
-                format!("{} (自动)", val)
             } else { val };
             ListItem::new(Line::from(vec![
                 Span::styled(if focused { "▸ " } else { "  " }, Style::default().fg(Color::Cyan)),
                 Span::styled(format!(" {:<12}", f.label), Style::default().fg(Color::Cyan)),
                 Span::styled(display, if focused {
                     Style::default().fg(Color::White).bg(Color::DarkGray)
-                } else if f.auto_filled {
-                    Style::default().fg(Color::DarkGray)
                 } else { Style::default().fg(Color::White) }),
             ]))
         }).collect();
-
-        // 安全模式行
-        let sec_focused = self.focus == self.fields.len();
-        items.push(ListItem::new(Line::from(vec![
-            Span::styled(if sec_focused { "▸ " } else { "  " }, Style::default().fg(Color::Cyan)),
-            Span::styled(" 安全模式  ", Style::default().fg(Color::Cyan)),
-            Span::styled(self.security_options[self.security_idx], if sec_focused {
-                Style::default().fg(Color::White).bg(Color::DarkGray)
-            } else { Style::default().fg(Color::White) }),
-        ])));
-
         frame.render_widget(
-            List::new(items).block(Block::default().borders(Borders::ALL).title(" 账户信息 ")),
+            List::new(basic_items).block(Block::default().borders(Borders::ALL).title(" 📋 基本设置 ")),
             chunks[1],
         );
 
-        // 底部提示
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![
-                Span::styled(" Tab/↑↓ ", Style::default().fg(Color::DarkGray)),
-                Span::raw("切换  "),
-                Span::styled(" Enter ", Style::default().fg(Color::DarkGray)),
-                Span::raw("确认/下一项  "),
-                Span::styled(" Ctrl+S ", Style::default().fg(Color::DarkGray)),
-                Span::raw("保存  "),
-                Span::styled(" Esc ", Style::default().fg(Color::DarkGray)),
-                Span::raw("取消"),
-            ])),
-            chunks[2],
-        );
+        // ── 高级设置 ──
+        let mut adv_items: Vec<ListItem> = self.fields[BASIC_COUNT..].iter().enumerate().map(|(i, f)| {
+                let idx = BASIC_COUNT + i;
+                let focused = idx == self.focus;
+                let val = f.display();
+                let display = if val.is_empty() && !focused {
+                    format!(" <输入{}>", f.label)
+                } else if f.auto_filled && !focused {
+                    format!("{} (自动)", val)
+                } else { val };
+                ListItem::new(Line::from(vec![
+                    Span::styled(if focused { "▸ " } else { "  " }, Style::default().fg(Color::Cyan)),
+                    Span::styled(format!(" {:<12}", f.label), Style::default().fg(Color::Cyan)),
+                    Span::styled(display, if focused {
+                        Style::default().fg(Color::White).bg(Color::DarkGray)
+                    } else if f.auto_filled {
+                        Style::default().fg(Color::DarkGray)
+                    } else { Style::default().fg(Color::White) }),
+                ]))
+            }).collect();
+
+            // 安全模式行
+            let sec_focused = self.focus == self.fields.len();
+            adv_items.push(ListItem::new(Line::from(vec![
+                Span::styled(if sec_focused { "▸ " } else { "  " }, Style::default().fg(Color::Cyan)),
+                Span::styled(" 安全模式  ", Style::default().fg(Color::Cyan)),
+                Span::styled(self.security_options[self.security_idx], if sec_focused {
+                    Style::default().fg(Color::White).bg(Color::DarkGray)
+                } else { Style::default().fg(Color::White) }),
+            ])));
+            frame.render_widget(
+                List::new(adv_items).block(Block::default().borders(Borders::ALL).title(" ⚙ 高级设置 ")),
+                chunks[2],
+            );
 
         Ok(())
     }
