@@ -297,27 +297,12 @@ fn pad_left(s: &str, total_cols: usize) -> String {
     format!("{}{}", " ".repeat(total_cols - w), s)
 }
 
-/// "17-Jul-2026" / "9 Jul 2026" / "Thu, 9 Jul 2026 ..." → "2026/07/17"
+/// RFC 2822 日期 → 北京时间 "2006/07/18"
 fn reformat_date(s: &str) -> String {
-    let s = s.trim();
-    // 跳过 "Thu, " 前缀
-    let bytes = s.as_bytes();
-    let date_str = if bytes.len() > 4 && bytes[3] == b',' { &s[5..] } else { s };
-
-    // 提取 "dd-Mmm-yyyy" 或 "d Mmm yyyy"
-    let parts: Vec<&str> = date_str.split(|c: char| c == '-' || c == ' ' || c == '/')
-        .filter(|p| !p.is_empty())
-        .collect();
-
-    if parts.len() < 3 { return date_str.to_string(); }
-
-    let day = parts[0];
-    let month = match &parts[1][..3.min(parts[1].len())] {
-        "Jan" => "01", "Feb" => "02", "Mar" => "03", "Apr" => "04",
-        "May" => "05", "Jun" => "06", "Jul" => "07", "Aug" => "08",
-        "Sep" => "09", "Oct" => "10", "Nov" => "11", "Dec" => "12",
-        _ => return date_str.to_string(),
-    };
-    let year = parts[2];
-    format!("{year}/{month}/{day:0>2}")
+    use chrono::{DateTime, Datelike, FixedOffset};
+    if let Ok(dt) = DateTime::parse_from_rfc2822(s.trim()) {
+        let bj = dt.with_timezone(&FixedOffset::east_opt(8 * 3600).unwrap());
+        return format!("{}/{:02}/{:02}", bj.year(), bj.month(), bj.day());
+    }
+    s.to_string()
 }

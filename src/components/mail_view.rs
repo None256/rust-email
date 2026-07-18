@@ -43,6 +43,32 @@ impl MailView {
     }
 }
 
+fn format_mail_date(raw: &str) -> String {
+    use chrono::{DateTime, FixedOffset, Datelike, Timelike, Weekday};
+    if let Ok(dt) = DateTime::parse_from_rfc2822(raw) {
+        let bj = dt.with_timezone(&FixedOffset::east_opt(8 * 3600).unwrap());
+        let wd = match bj.weekday() {
+            Weekday::Mon => "周一",
+            Weekday::Tue => "周二",
+            Weekday::Wed => "周三",
+            Weekday::Thu => "周四",
+            Weekday::Fri => "周五",
+            Weekday::Sat => "周六",
+            Weekday::Sun => "周日",
+        };
+        return format!(
+            "{}/{:02}/{:02} {} {:02}:{:02}",
+            bj.year(),
+            bj.month(),
+            bj.day(),
+            wd,
+            bj.hour(),
+            bj.minute(),
+        );
+    }
+    raw.to_string()
+}
+
 /// 解码常见 HTML 实体，并将 <br> 替换为换行
 fn decode_html_entities(text: &str) -> String {
     let s = text
@@ -216,7 +242,7 @@ impl Component for MailView {
                 Style::default().fg(Color::White),
             )),
             Line::from(Span::styled(
-                format!(" 日  期: {}", mail.date),
+                format!(" 日  期: {}", format_mail_date(&mail.date)),
                 Style::default().fg(Color::DarkGray),
             )),
         ]);
