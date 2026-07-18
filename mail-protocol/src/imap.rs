@@ -627,7 +627,9 @@ async fn try_fetch_summaries(
             }
         }
     }
-    unreachable!()
+    Err(MailError::Protocol(
+        "FETCH failed: all query strategies exhausted".into(),
+    ))
 }
 
 async fn drain_store(
