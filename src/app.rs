@@ -559,7 +559,8 @@ impl App {
                         if let Some(att) = mail.attachments.get(*idx) {
                             let save_dir = save_dir();
                             tokio::fs::create_dir_all(&save_dir).await?;
-                            let file_path = save_dir.join(&att.filename);
+                            let safe_name = sanitize_filename(&att.filename);
+                            let file_path = save_dir.join(&safe_name);
                             match self
                                 .mail_client
                                 .fetch_attachment(&mail.folder, mail.uid, &att.part_id, att.transfer_encoding.as_deref())
@@ -711,6 +712,14 @@ fn save_dir() -> std::path::PathBuf {
     std::env::var("USERPROFILE")
         .map(|p| std::path::PathBuf::from(p).join("Desktop").join("rust-email-attachments"))
         .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default().join("rust-email-attachments"))
+}
+
+fn sanitize_filename(filename: &str) -> String {
+    Path::new(filename)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("attachment")
+        .to_string()
 }
 
 fn mime_from_ext(filename: &str) -> String {

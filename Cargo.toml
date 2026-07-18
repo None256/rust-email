@@ -9,6 +9,7 @@ name = "rust-email"
 version = "0.1.0"
 edition = "2024"
 description = "Null"
+repository = "https://github.com/None256/rust-email"
 authors = ["None256 <nonessentialism@outlook.com>"]
 build = "build.rs"
 

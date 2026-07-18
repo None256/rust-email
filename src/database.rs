@@ -22,6 +22,16 @@ fn parent_path(path: &Path) -> &Path {
     path.parent().unwrap_or_else(|| Path::new("."))
 }
 
+fn set_restrictive_permissions(path: &Path) -> color_eyre::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    let _ = path;
+    Ok(())
+}
+
 fn init_password_key(dir: &Path) -> color_eyre::Result<()> {
     if PASSWORD_KEY.get().is_some() {
         return Ok(());
@@ -38,6 +48,7 @@ fn init_password_key(dir: &Path) -> color_eyre::Result<()> {
     } else {
         rand::thread_rng().fill_bytes(&mut key);
         std::fs::write(&key_path, key)?;
+        set_restrictive_permissions(&key_path)?;
     }
     let _ = PASSWORD_KEY.set(key);
     Ok(())
