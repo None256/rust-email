@@ -24,9 +24,11 @@ pub fn set_password_key(key: [u8; 32]) {
 }
 
 fn encrypt_password(password: &str) -> color_eyre::Result<String> {
-    let key = PASSWORD_KEY
-        .get()
-        .ok_or_else(|| color_eyre::eyre::eyre!("password key is not initialized"))?;
+    let key = PASSWORD_KEY.get_or_init(|| {
+        let mut key = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut key);
+        key
+    });
     let cipher = Aes256Gcm::new_from_slice(key).unwrap();
     let mut nonce = [0u8; 12];
     rand::thread_rng().fill_bytes(&mut nonce);
