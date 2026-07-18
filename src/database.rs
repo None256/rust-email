@@ -7,6 +7,7 @@ use aes_gcm::{
 };
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use rand::RngCore;
+use tracing::{info, warn};
 
 use mail_protocol::{
     AccountConfig, AttachmentMeta, Email, EmailSummary, Folder, MailFlag, SecurityMode,
@@ -35,9 +36,18 @@ fn init_password_key(dir: &Path) -> color_eyre::Result<()> {
                 .get(..32)
                 .ok_or_else(|| color_eyre::eyre::eyre!("invalid password key"))?,
         );
+        info!(
+            "已加载密码密钥: {} （请勿删除此文件，否则所有已存储的账户密码将无法解密）",
+            key_path.display()
+        );
     } else {
         rand::thread_rng().fill_bytes(&mut key);
         std::fs::write(&key_path, key)?;
+        warn!(
+            "已生成新的密码密钥: {}\n\
+             ⚠ 请务必备份此文件！一旦丢失或删除，所有已存储的邮箱密码将永久无法恢复。",
+            key_path.display()
+        );
     }
     let _ = PASSWORD_KEY.set(key);
     Ok(())

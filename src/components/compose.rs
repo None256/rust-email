@@ -12,7 +12,7 @@ use tokio::sync::mpsc::UnboundedSender;
 use super::Component;
 use crate::action::Action;
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct ComposeField {
     label: &'static str,
     value: String,

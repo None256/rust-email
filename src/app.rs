@@ -708,9 +708,10 @@ impl App {
 }
 
 fn save_dir() -> std::path::PathBuf {
-    std::env::var("USERPROFILE")
-        .map(|p| std::path::PathBuf::from(p).join("Desktop").join("rust-email-attachments"))
-        .unwrap_or_else(|_| std::env::current_dir().unwrap_or_default().join("rust-email-attachments"))
+    dirs::desktop_dir()
+        .or_else(dirs::download_dir)
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
+        .join("rust-email-attachments")
 }
 
 fn mime_from_ext(filename: &str) -> String {
