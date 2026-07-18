@@ -272,11 +272,13 @@ impl App {
                     self.switch_mode(Mode::Compose);
                 }
                 Action::Reply => {
-                    if let Some(ref mail) = self.mail_view.mail {
-                        self.compose = Compose::new();
-                        self.compose.set_reply(&mail.from, &mail.subject, mail.message_id.as_deref());
-                        self.previous_mode = Some(self.mode);
-                        self.switch_mode(Mode::Compose);
+                    if self.mode == Mode::MailView {
+                        if let Some(ref mail) = self.mail_view.mail {
+                            self.compose = Compose::new();
+                            self.compose.set_reply(&mail.from, &mail.subject, mail.message_id.as_deref());
+                            self.previous_mode = Some(self.mode);
+                            self.switch_mode(Mode::Compose);
+                        }
                     } else if let Some(i) = self.mail_list.state.selected() {
                         if let Some(summary) = self.mail_list.mails.get(i) {
                             self.compose = Compose::new();
@@ -287,11 +289,13 @@ impl App {
                     }
                 }
                 Action::ReplyAll => {
-                    if let Some(ref mail) = self.mail_view.mail {
-                        self.compose = Compose::new();
-                        self.compose.set_reply_all(&mail.from, &mail.to, &mail.subject, mail.message_id.as_deref());
-                        self.previous_mode = Some(self.mode);
-                        self.switch_mode(Mode::Compose);
+                    if self.mode == Mode::MailView {
+                        if let Some(ref mail) = self.mail_view.mail {
+                            self.compose = Compose::new();
+                            self.compose.set_reply_all(&mail.from, &mail.to, &mail.subject, mail.message_id.as_deref());
+                            self.previous_mode = Some(self.mode);
+                            self.switch_mode(Mode::Compose);
+                        }
                     } else if let Some(i) = self.mail_list.state.selected() {
                         if let Some(summary) = self.mail_list.mails.get(i) {
                             let to: Vec<String> = summary.to.split(',').map(|s| s.trim().to_string()).collect();
@@ -303,11 +307,13 @@ impl App {
                     }
                 }
                 Action::Forward => {
-                    if let Some(ref mail) = self.mail_view.mail {
-                        self.compose = Compose::new();
-                        self.compose.set_forward(&mail.subject);
-                        self.previous_mode = Some(self.mode);
-                        self.switch_mode(Mode::Compose);
+                    if self.mode == Mode::MailView {
+                        if let Some(ref mail) = self.mail_view.mail {
+                            self.compose = Compose::new();
+                            self.compose.set_forward(&mail.subject);
+                            self.previous_mode = Some(self.mode);
+                            self.switch_mode(Mode::Compose);
+                        }
                     } else if let Some(i) = self.mail_list.state.selected() {
                         if let Some(summary) = self.mail_list.mails.get(i) {
                             self.compose = Compose::new();
@@ -684,6 +690,10 @@ impl App {
     fn switch_mode(&mut self, new_mode: Mode) {
         if new_mode == Mode::Home {
             self.status_bar.clear_folder();
+        }
+        // 离开邮件查看页时清空缓存（进入 Compose 除外，回复完还要回来）
+        if self.mode == Mode::MailView && new_mode != Mode::MailView && new_mode != Mode::Compose {
+            self.mail_view.mail = None;
         }
         self.mode = new_mode;
         self.status_bar.set_mode(new_mode);
