@@ -1,42 +1,42 @@
 {
   "keybindings": {
-    // ── 首页 ──
+    //首页
     "Home": {
       "<q>": "Quit",
       "<Ctrl-d>": "Quit",
       "<Ctrl-c>": "Quit",
       "<Ctrl-z>": "Suspend",
-      "<Enter>": "Connect",        // 连接选中账户
+      "<Enter>": "Connect",
     },
 
-    // ── 文件夹列表 ──
+    //文件夹列表
     "FolderList": {
       "<q>": "Quit",
       "<Esc>": "Back",
-      "<j>": "NextMail",           // 向下
-      "<k>": "PrevMail",           // 向上
-      "<Enter>": "LoadMails",      // 进入选中文件夹
-      "<c>": "Compose",            // 写邮件
-      "<R>": "RefreshFolders",     // 刷新
+      "<j>": "NextMail",
+      "<k>": "PrevMail",
+      "<Enter>": "LoadMails",
+      "<c>": "Compose",
+      "<R>": "RefreshFolders",
     },
 
-    // ── 邮件列表 ──
+    //邮件列表
     "MailList": {
       "<q>": "Quit",
       "<Esc>": "Back",
       "<j>": "NextMail",
       "<k>": "PrevMail",
-      "<Enter>": "ViewMail",       // 查看选中邮件
-      "<c>": "Compose",            // 新建邮件
-      "<r>": "Reply",              // 回复
-      "<a>": "ReplyAll",           // 回复全部
-      "<f>": "Forward",            // 转发
-      "<d>": "DeleteMail",         // 删除
-      "<s>": "ToggleFlag",         // 星标
-      "<M>": "LoadMoreMails",      // 加载更多
+      "<Enter>": "ViewMail",
+      "<c>": "Compose",
+      "<r>": "Reply",
+      "<a>": "ReplyAll",
+      "<f>": "Forward",
+      "<d>": "DeleteMail",
+      "<s>": "ToggleFlag",
+      "<M>": "LoadMoreMails",
     },
 
-    // ── 邮件阅读 ──
+    //邮件阅读
     "MailView": {
       "<q>": "Quit",
       "<Esc>": "Back",
@@ -47,16 +47,16 @@
       "<f>": "Forward",
       // 'd' 由组件处理：有附件时下载，无附件时删除
       "<s>": "ToggleFlag",
-      "<h>": "ShowHtml",           // HTML 视图
-      "<t>": "ShowText",           // 纯文本视图
+      "<h>": "ShowHtml",
+      "<t>": "ShowText",
     },
     
-    // ── 写邮件 ──
+    //写邮件
     "Compose": {
       "<q>": "Quit",
       "<Esc>": "CancelCompose",
-      "<Ctrl-s>": "Send",          // 发送
-      "<Tab>": "Help",             // 切换输入框（暂用）
+      "<Ctrl-s>": "Send",
+      "<Tab>": "Help",
     },
   }
 }

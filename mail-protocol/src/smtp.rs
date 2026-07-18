@@ -47,7 +47,7 @@ impl Default for SmtpSender {
     }
 }
 
-// ── 内部辅助 ────────────────────────────────────────────────────────
+//内部辅助
 
 fn create_transport(
     config: &AccountConfig,

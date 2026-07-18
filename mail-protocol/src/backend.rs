@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::MailError;
 
-// ── 配置 ────────────────────────────────────────────────────────────
+//配置
 
 /// 账户连接配置
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,7 +34,7 @@ pub enum SecurityMode {
     None,
 }
 
-// ── 文件夹 ──────────────────────────────────────────────────────────
+//文件夹
 
 /// 邮箱文件夹
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -47,7 +47,7 @@ pub struct Folder {
     pub attributes: Vec<String>,
 }
 
-// ── 邮件 ────────────────────────────────────────────────────────────
+//邮件
 
 /// 邮件列表项 — 仅含摘要信息, 不包含正文, 用于列表展示
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -166,7 +166,7 @@ pub struct OutgoingEmail {
     pub references: Vec<String>,
 }
 
-// ── 标记 ────────────────────────────────────────────────────────────
+//标记
 
 /// 邮件标记
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -187,12 +187,11 @@ pub enum MailFlag {
     Custom(String),
 }
 
-// ── 协议抽象 ────────────────────────────────────────────────────────
+//协议抽象
 
 /// 邮件协议后端
 ///
 /// 所有网络 I/O 通过此 trait 进行。
-/// UI 和数据库层只依赖这个接口, 不关心底层是 IMAP/SMTP 还是其他协议。
 #[async_trait]
 pub trait MailBackend: Send + Sync {
     // ---- 连接生命周期 ----

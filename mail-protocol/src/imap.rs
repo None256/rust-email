@@ -19,12 +19,12 @@ use crate::backend::*;
 use crate::error::MailError;
 use crate::smtp::SmtpSender;
 
-// ── 类型别名 ────────────────────────────────────────────────────────
+//类型别名
 
 type CompatTlsStream = TlsStream<tokio_util::compat::Compat<TcpStream>>;
 type ImapSession = ImapSessionInner<CompatTlsStream>;
 
-// ── MailClient ──────────────────────────────────────────────────────
+//MailClient
 
 pub struct MailClient {
     inner: Mutex<ClientInner>,
@@ -56,7 +56,7 @@ impl Default for MailClient {
 
 #[async_trait::async_trait]
 impl MailBackend for MailClient {
-    // ── 连接生命周期 ────────────────────────────────────────────────
+    //连接生命周期
 
     async fn connect(&mut self, config: &AccountConfig) -> Result<(), MailError> {
         let mut inner = self.inner.lock().await;
@@ -194,7 +194,7 @@ impl MailBackend for MailClient {
         }
     }
 
-    // ── 文件夹操作 ──────────────────────────────────────────────────
+    //文件夹操作
 
     async fn list_folders(&self) -> Result<Vec<Folder>, MailError> {
         let mut inner = self.inner.lock().await;
@@ -260,7 +260,7 @@ impl MailBackend for MailClient {
         Ok(())
     }
 
-    // ── 邮件列表 ────────────────────────────────────────────────────
+    //邮件列表
 
     async fn fetch_latest_messages(
         &self,
@@ -324,7 +324,7 @@ impl MailBackend for MailClient {
         fetch_summaries_by_uid(session, &sequence).await
     }
 
-    // ── 邮件内容 ────────────────────────────────────────────────────
+    //邮件内容
 
     async fn fetch_message(&self, folder: &str, uid: u32) -> Result<Email, MailError> {
         let mut inner = self.inner.lock().await;
@@ -414,7 +414,7 @@ impl MailBackend for MailClient {
         Ok(decode_transfer_encoding(raw, encoding))
     }
 
-    // ── 发送 ────────────────────────────────────────────────────────
+    //发送
 
     async fn send(&self, email: &OutgoingEmail) -> Result<(), MailError> {
         let inner = self.inner.lock().await;
@@ -422,7 +422,7 @@ impl MailBackend for MailClient {
         SmtpSender::send(config, email).await
     }
 
-    // ── 标记 ────────────────────────────────────────────────────────
+    //标记
 
     async fn add_flags(
         &self,
@@ -466,7 +466,7 @@ impl MailBackend for MailClient {
         drain_store(session, &uid_list, &query).await
     }
 
-    // ── 移动 / 复制 ─────────────────────────────────────────────────
+    //移动 / 复制
 
     async fn move_messages(
         &self,
@@ -506,7 +506,7 @@ impl MailBackend for MailClient {
         Ok(())
     }
 
-    // ── 统计 ────────────────────────────────────────────────────────
+    //统计
 
     async fn message_count(&self, folder: &str) -> Result<u32, MailError> {
         let mut inner = self.inner.lock().await;
@@ -532,7 +532,7 @@ impl MailBackend for MailClient {
         Ok(mailbox.unseen.unwrap_or(0))
     }
 
-    // ── 保活 ────────────────────────────────────────────────────────
+    //保活
 
     async fn noop(&self) -> Result<(), MailError> {
         let mut inner = self.inner.lock().await;
@@ -545,9 +545,8 @@ impl MailBackend for MailClient {
     }
 }
 
-// ════════════════════════════════════════════════════════════════════
+
 // IMAP 操作辅助
-// ════════════════════════════════════════════════════════════════════
 
 use async_imap::types::Mailbox;
 
@@ -740,9 +739,9 @@ fn parse_header_field(raw: &Option<String>, name: &str) -> Option<String> {
     None
 }
 
-// ════════════════════════════════════════════════════════════════════
+
 // MIME 解析辅助
-// ════════════════════════════════════════════════════════════════════
+
 
 fn get_header(parsed: &ParsedMail<'_>, name: &str) -> Option<String> {
     for h in &parsed.headers {
@@ -1006,9 +1005,9 @@ fn parse_references(parsed: &ParsedMail<'_>) -> Vec<String> {
         .collect()
 }
 
-// ════════════════════════════════════════════════════════════════════
+
 // 标记转换
-// ════════════════════════════════════════════════════════════════════
+
 
 fn parse_flag(flag: Flag<'_>) -> MailFlag {
     match flag {
@@ -1054,9 +1053,9 @@ fn name_attr_to_string(attr: &async_imap::types::NameAttribute<'_>) -> String {
     }
 }
 
-// ════════════════════════════════════════════════════════════════════
+
 // 通用辅助
-// ════════════════════════════════════════════════════════════════════
+
 
 fn bytes_to_string(bytes: impl AsRef<[u8]>) -> String {
     String::from_utf8_lossy(bytes.as_ref()).into_owned()
