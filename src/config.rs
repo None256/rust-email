@@ -96,18 +96,23 @@ impl Config {
 
 pub fn get_data_dir() -> PathBuf {
     if let Some(s) = DATA_FOLDER.clone() {
-        s
-    } else {
-        PathBuf::from(".").join(".data")
+        return s;
     }
+    exe_dir().join(".data")
 }
 
 pub fn get_config_dir() -> PathBuf {
     if let Some(s) = CONFIG_FOLDER.clone() {
-        s
-    } else {
-        PathBuf::from(".").join(".config")
+        return s;
     }
+    exe_dir().join(".config")
+}
+
+fn exe_dir() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(PathBuf::from))
+        .unwrap_or_else(|| PathBuf::from("."))
 }
 
 

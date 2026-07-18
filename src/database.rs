@@ -7,7 +7,6 @@ use aes_gcm::{
 };
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
 use rand::RngCore;
-use tracing::{info, warn};
 
 use mail_protocol::{
     AccountConfig, AttachmentMeta, Email, EmailSummary, Folder, MailFlag, SecurityMode,
@@ -19,57 +18,15 @@ use sqlx::{
 
 static PASSWORD_KEY: OnceLock<[u8; 32]> = OnceLock::new();
 
-fn parent_path(path: &Path) -> &Path {
-    path.parent().unwrap_or_else(|| Path::new("."))
-}
-
-fn set_restrictive_permissions(path: &Path) -> color_eyre::Result<()> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-    }
-    let _ = path;
-    Ok(())
-}
-
-fn init_password_key(dir: &Path) -> color_eyre::Result<()> {
-    if PASSWORD_KEY.get().is_some() {
-        return Ok(());
-    }
-    let key_path = dir.join("password.key");
-    let mut key = [0u8; 32];
-    if key_path.exists() {
-        let bytes = std::fs::read(&key_path)?;
-        key.copy_from_slice(
-            bytes
-                .get(..32)
-                .ok_or_else(|| color_eyre::eyre::eyre!("invalid password key"))?,
-        );
-        info!(
-            "已加载密码密钥: {} （请勿删除此文件，否则所有已存储的账户密码将无法解密）",
-            key_path.display()
-        );
-    } else {
-        rand::thread_rng().fill_bytes(&mut key);
-        std::fs::write(&key_path, key)?;
-        set_restrictive_permissions(&key_path)?;
-        warn!(
-            "已生成新的密码密钥: {}\n\
-             ⚠ 请务必备份此文件！一旦丢失或删除，所有已存储的邮箱密码将永久无法恢复。",
-            key_path.display()
-        );
-    }
+/// 由 main.rs 在启动时调用，将用户主密码派生出的密钥注入全局状态
+pub fn set_password_key(key: [u8; 32]) {
     let _ = PASSWORD_KEY.set(key);
-    Ok(())
 }
 
 fn encrypt_password(password: &str) -> color_eyre::Result<String> {
-    let key = PASSWORD_KEY.get_or_init(|| {
-        let mut key = [0u8; 32];
-        rand::thread_rng().fill_bytes(&mut key);
-        key
-    });
+    let key = PASSWORD_KEY
+        .get()
+        .ok_or_else(|| color_eyre::eyre::eyre!("password key is not initialized"))?;
     let cipher = Aes256Gcm::new_from_slice(key).unwrap();
     let mut nonce = [0u8; 12];
     rand::thread_rng().fill_bytes(&mut nonce);
@@ -155,7 +112,6 @@ pub async fn connect(path: &Path) -> color_eyre::Result<SqlitePool> {
         .connect_with(options)
         .await?;
     sqlx::migrate!("./migrations").run(&pool).await?;
-    init_password_key(parent_path(path))?;
     migrate_plaintext_passwords(&pool).await?;
     Ok(pool)
 }
