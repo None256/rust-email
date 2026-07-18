@@ -32,6 +32,8 @@ pub struct Compose {
     reply_to: Option<String>,
     reply_all: bool,
     forward: bool,
+    /// 回复时记录原邮件的 Message-ID
+    in_reply_to: Option<String>,
 }
 
 impl Compose {
@@ -53,20 +55,22 @@ impl Compose {
     }
 
     /// 回复时预填收件人、主题
-    pub fn set_reply(&mut self, from: &str, subject: &str) {
+    pub fn set_reply(&mut self, from: &str, subject: &str, message_id: Option<&str>) {
         self.fields[0].value = from.to_string();
         self.fields[3].value = format!("Re: {}", subject.trim_start_matches("Re: ").trim());
         self.reply_to = Some(String::new());
+        self.in_reply_to = message_id.map(str::to_string);
     }
 
     /// 回复全部时预填收件人+抄送
-    pub fn set_reply_all(&mut self, from: &str, cc: &[String], subject: &str) {
+    pub fn set_reply_all(&mut self, from: &str, cc: &[String], subject: &str, message_id: Option<&str>) {
         self.fields[0].value = from.to_string();
         if !cc.is_empty() {
             self.fields[1].value = cc.join("; ");
         }
         self.fields[3].value = format!("Re: {}", subject.trim_start_matches("Re: ").trim());
         self.reply_all = true;
+        self.in_reply_to = message_id.map(str::to_string);
     }
 
     /// 转发时预填主题
@@ -93,6 +97,7 @@ impl Compose {
 
     /// 构建待发送邮件（供 App 调用）
     pub fn build_outgoing(&self, from: &str) -> mail_protocol::OutgoingEmail {
+        let references: Vec<String> = self.in_reply_to.iter().cloned().collect();
         mail_protocol::OutgoingEmail {
             from: from.to_string(),
             to: split_recipients(&self.fields[0].value),
@@ -102,8 +107,8 @@ impl Compose {
             body_text: Some(self.fields[4].value.clone()),
             body_html: None,
             attachments: self.attachments.clone(),
-            in_reply_to: None,
-            references: Vec::new(),
+            in_reply_to: self.in_reply_to.clone(),
+            references,
         }
     }
 

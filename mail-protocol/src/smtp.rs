@@ -4,7 +4,11 @@ use lettre::{
         Mailbox, MultiPart, SinglePart,
         header::{ContentDisposition, ContentId, ContentType},
     },
-    transport::smtp::{AsyncSmtpTransport, authentication::Credentials},
+    transport::smtp::{
+        AsyncSmtpTransport,
+        authentication::Credentials,
+        client::{Tls, TlsParameters},
+    },
 };
 use tracing::{error, info};
 
@@ -50,18 +54,24 @@ fn create_transport(
 ) -> Result<AsyncSmtpTransport<lettre::Tokio1Executor>, MailError> {
     let credentials = Credentials::new(config.username.clone(), config.password.clone());
 
+    let tls_params = TlsParameters::builder(config.smtp_host.clone())
+        .build()
+        .map_err(|e| MailError::Connection(format!("TLS params: {e}")))?;
+
     let transport = match config.security {
         SecurityMode::Tls => {
-            AsyncSmtpTransport::<lettre::Tokio1Executor>::relay(&config.smtp_host)
-                .map_err(|e| MailError::Connection(format!("invalid SMTP relay: {e}")))?
+            AsyncSmtpTransport::<lettre::Tokio1Executor>::builder_dangerous(&config.smtp_host)
+                .port(config.smtp_port)
+                .tls(Tls::Wrapper(tls_params))
         }
         SecurityMode::StartTls => {
-            AsyncSmtpTransport::<lettre::Tokio1Executor>::starttls_relay(&config.smtp_host)
-                .map_err(|e| MailError::Connection(format!("invalid SMTP relay: {e}")))?
+            AsyncSmtpTransport::<lettre::Tokio1Executor>::builder_dangerous(&config.smtp_host)
+                .port(config.smtp_port)
+                .tls(Tls::Required(tls_params))
         }
         SecurityMode::None => {
             return Err(MailError::Connection(
-                "unencrypted SMTP not supported via lettre relay builder".into(),
+                "unencrypted SMTP not supported".into(),
             ));
         }
     }

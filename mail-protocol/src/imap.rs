@@ -1,4 +1,5 @@
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_imap::{
     Client as ImapClientInner, Session as ImapSessionInner,
@@ -32,6 +33,7 @@ pub struct MailClient {
 struct ClientInner {
     config: Option<AccountConfig>,
     session: Option<ImapSession>,
+    connected: AtomicBool,
 }
 
 impl MailClient {
@@ -40,6 +42,7 @@ impl MailClient {
             inner: Mutex::new(ClientInner {
                 config: None,
                 session: None,
+                connected: AtomicBool::new(false),
             }),
         }
     }
@@ -118,6 +121,7 @@ impl MailBackend for MailClient {
                 }
                 inner.config = Some(config.clone());
                 inner.session = Some(session);
+                inner.connected.store(true, Ordering::SeqCst);
                 Ok(())
             }
             SecurityMode::StartTls => {
@@ -160,6 +164,7 @@ impl MailBackend for MailClient {
                 let _ = session.select("INBOX").await;
                 inner.config = Some(config.clone());
                 inner.session = Some(session);
+                inner.connected.store(true, Ordering::SeqCst);
                 Ok(())
             }
             SecurityMode::None => Err(MailError::Connection(
@@ -170,6 +175,7 @@ impl MailBackend for MailClient {
 
     async fn disconnect(&mut self) -> Result<(), MailError> {
         let mut inner = self.inner.lock().await;
+        inner.connected.store(false, Ordering::SeqCst);
         if let Some(mut session) = inner.session.take() {
             session
                 .logout()
@@ -181,9 +187,10 @@ impl MailBackend for MailClient {
     }
 
     fn is_connected(&self) -> bool {
+        // 锁空闲时直接读状态，锁被占用说明正在执行操作即已连接
         match self.inner.try_lock() {
-            Ok(inner) => inner.session.is_some(),
-            Err(_) => false,
+            Ok(inner) => inner.connected.load(Ordering::SeqCst),
+            Err(_) => true,
         }
     }
 

@@ -161,7 +161,7 @@ impl AccountForm {
         })
     }
 
-    fn reset(&mut self) {
+    pub fn reset(&mut self) {
         for f in &mut self.fields {
             f.value.clear();
             f.auto_filled = false;

@@ -12,6 +12,8 @@ pub enum Action {
     Quit,
     ClearScreen,
     Error(String),
+    /// 信息提示（非错误，仅用于状态栏显示）
+    Notify(String),
     Help,
 
     // ── 账户管理 ──

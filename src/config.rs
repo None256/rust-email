@@ -95,21 +95,19 @@ impl Config {
 }
 
 pub fn get_data_dir() -> PathBuf {
-    let directory = if let Some(s) = DATA_FOLDER.clone() {
+    if let Some(s) = DATA_FOLDER.clone() {
         s
     } else {
         PathBuf::from(".").join(".data")
-    };
-    directory
+    }
 }
 
 pub fn get_config_dir() -> PathBuf {
-    let directory = if let Some(s) = CONFIG_FOLDER.clone() {
+    if let Some(s) = CONFIG_FOLDER.clone() {
         s
     } else {
         PathBuf::from(".").join(".config")
-    };
-    directory
+    }
 }
 
 

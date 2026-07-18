@@ -54,6 +54,11 @@ fn init_password_key(dir: &Path) -> color_eyre::Result<()> {
         rand::thread_rng().fill_bytes(&mut key);
         std::fs::write(&key_path, key)?;
         set_restrictive_permissions(&key_path)?;
+        warn!(
+            "已生成新的密码密钥: {}\n\
+             ⚠ 请务必备份此文件！一旦丢失或删除，所有已存储的邮箱密码将永久无法恢复。",
+            key_path.display()
+        );
     }
     let _ = PASSWORD_KEY.set(key);
     Ok(())

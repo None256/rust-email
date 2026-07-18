@@ -57,7 +57,8 @@ impl Component for StatusBar {
             }
             Action::ConnectionFailed(msg) => self.set_message(msg),
             Action::SelectFolder(name) => self.current_folder = Some(name),
-            Action::Error(msg) => self.set_message(msg),
+            Action::Error(msg) => self.set_message(format!("✗ {msg}")),
+            Action::Notify(msg) => self.set_message(msg),
             Action::Send => self.set_message("✓ 邮件已发送".into()),
             Action::DeleteMail => self.set_message("✓ 邮件已删除".into()),
             Action::ToggleFlag => self.set_message("✓ 已切换星标".into()),

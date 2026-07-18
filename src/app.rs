@@ -11,7 +11,7 @@ use std::path::Path;
 use crate::{
     action::Action,
     components::{
-        account_form::AccountForm, compose::Compose, folder_list::FolderList, fps::FpsCounter,
+        account_form::AccountForm, compose::Compose, folder_list::FolderList,
         home::Home, mail_list::MailList, mail_view::MailView, status_bar::StatusBar, Component,
     },
     config::Config,
@@ -31,13 +31,14 @@ pub struct App {
     folder_list: FolderList,
     mail_list: MailList,
     mail_view: MailView,
-    fps_counter: FpsCounter,
     status_bar: StatusBar,
 
     // 状态
     should_quit: bool,
     should_suspend: bool,
     mode: Mode,
+    /// 进入 Compose 前的模式，用于取消时返回
+    previous_mode: Option<Mode>,
     connecting: bool,
 
     // 内存账户管理
@@ -89,12 +90,12 @@ impl App {
             folder_list: FolderList::new(),
             mail_list: MailList::new(),
             mail_view: MailView::new(),
-            fps_counter: FpsCounter::default(),
             status_bar: StatusBar::new(),
             should_quit: false,
             should_suspend: false,
             config: Config::new()?,
             mode: Mode::Home,
+            previous_mode: None,
             connecting: false,
             accounts,
             active_account_id: None,
@@ -218,12 +219,11 @@ impl App {
                 Action::Resize(_, _) => {}
                 Action::Render => {
                     self.render(tui)?;
-                    // 更新组件
-                    self.fps_counter.update(Action::Render)?;
                 }
 
                 // ── 账户管理 ──
                 Action::AddAccount => {
+                    self.account_form.reset();
                     self.switch_mode(Mode::AccountForm);
                 }
                 Action::SaveAccount => {
@@ -268,17 +268,20 @@ impl App {
                 // ── 写邮件 ──
                 Action::Compose => {
                     self.compose = Compose::new();
+                    self.previous_mode = Some(self.mode);
                     self.switch_mode(Mode::Compose);
                 }
                 Action::Reply => {
                     if let Some(ref mail) = self.mail_view.mail {
                         self.compose = Compose::new();
-                        self.compose.set_reply(&mail.from, &mail.subject);
+                        self.compose.set_reply(&mail.from, &mail.subject, mail.message_id.as_deref());
+                        self.previous_mode = Some(self.mode);
                         self.switch_mode(Mode::Compose);
                     } else if let Some(i) = self.mail_list.state.selected() {
                         if let Some(summary) = self.mail_list.mails.get(i) {
                             self.compose = Compose::new();
-                            self.compose.set_reply(&summary.from, &summary.subject);
+                            self.compose.set_reply(&summary.from, &summary.subject, summary.message_id.as_deref());
+                            self.previous_mode = Some(self.mode);
                             self.switch_mode(Mode::Compose);
                         }
                     }
@@ -286,13 +289,15 @@ impl App {
                 Action::ReplyAll => {
                     if let Some(ref mail) = self.mail_view.mail {
                         self.compose = Compose::new();
-                        self.compose.set_reply_all(&mail.from, &mail.to, &mail.subject);
+                        self.compose.set_reply_all(&mail.from, &mail.to, &mail.subject, mail.message_id.as_deref());
+                        self.previous_mode = Some(self.mode);
                         self.switch_mode(Mode::Compose);
                     } else if let Some(i) = self.mail_list.state.selected() {
                         if let Some(summary) = self.mail_list.mails.get(i) {
                             let to: Vec<String> = summary.to.split(',').map(|s| s.trim().to_string()).collect();
                             self.compose = Compose::new();
-                            self.compose.set_reply_all(&summary.from, &to, &summary.subject);
+                            self.compose.set_reply_all(&summary.from, &to, &summary.subject, summary.message_id.as_deref());
+                            self.previous_mode = Some(self.mode);
                             self.switch_mode(Mode::Compose);
                         }
                     }
@@ -301,11 +306,13 @@ impl App {
                     if let Some(ref mail) = self.mail_view.mail {
                         self.compose = Compose::new();
                         self.compose.set_forward(&mail.subject);
+                        self.previous_mode = Some(self.mode);
                         self.switch_mode(Mode::Compose);
                     } else if let Some(i) = self.mail_list.state.selected() {
                         if let Some(summary) = self.mail_list.mails.get(i) {
                             self.compose = Compose::new();
                             self.compose.set_forward(&summary.subject);
+                            self.previous_mode = Some(self.mode);
                             self.switch_mode(Mode::Compose);
                         }
                     }
@@ -338,7 +345,8 @@ impl App {
                     }
                 }
                 Action::CancelCompose => {
-                    self.switch_mode(Mode::MailList);
+                    let target = self.previous_mode.take().unwrap_or(Mode::MailList);
+                    self.switch_mode(target);
                 }
 
                 // ── 连接管理 ──
@@ -522,7 +530,7 @@ impl App {
                             .add_flags(&folder, &[uid], &[mail_protocol::MailFlag::Deleted])
                             .await;
                         self.action_tx
-                            .send(Action::Error("邮件已标记为删除".into()))?;
+                            .send(Action::Notify("邮件已标记为删除".into()))?;
                     }
                 }
                 Action::LoadMoreMails => {}
@@ -575,7 +583,7 @@ impl App {
                                         let msg =
                                             format!("✓ 附件已保存: {}", file_path.display());
                                         info!("{msg}");
-                                        self.action_tx.send(Action::Error(msg))?;
+                                        self.action_tx.send(Action::Notify(msg))?;
                                     }
                                 }
                                 Err(e) => {
@@ -608,7 +616,7 @@ impl App {
                             });
                             let count = self.compose.attachments.len();
                             self.action_tx
-                                .send(Action::Error(format!("已添加附件 ({count} 个)")))?;
+                                .send(Action::Notify(format!("已添加附件 ({count} 个)")))?;
                         }
                         Err(e) => {
                             self.action_tx
@@ -644,7 +652,7 @@ impl App {
                             tokio::fs::write(&file_path, full_html.as_bytes()).await?;
                             let msg = format!("✓ HTML 已保存: {}", file_path.display());
                             info!("{msg}");
-                            self.action_tx.send(Action::Error(msg))?;
+                            self.action_tx.send(Action::Notify(msg))?;
                         }
                     }
                 }
